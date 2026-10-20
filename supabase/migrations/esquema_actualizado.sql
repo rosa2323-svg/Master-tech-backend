@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict cnKHGcyKua30LUW3w542WtEUWzAcOLK3WuucgexesljkBeccK3UvmdlfyzldORm
+\restrict 0CLtvOMqeVaNNXubB8Pn8d5jUOqDlDSOAW7rPEjpvHR9Zd4GAlNlgAx52DEvI8i
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
@@ -1126,6 +1126,8 @@ CREATE FUNCTION realtime.authorize(role_name text, topic_name text, claims text,
     AS $$
 declare
   probe_ids uuid[];
+  probe_inserted_at timestamp := now() at time zone 'utc';
+  visible_ids uuid[];
   ext text;
   allowed boolean;
 begin
@@ -1139,7 +1141,7 @@ begin
     probe_ids := array(select gen_random_uuid() from unnest(read_extensions));
 
     insert into realtime.messages (id, topic, extension, inserted_at, updated_at)
-    select p.id, topic_name, p.extension, now() at time zone 'utc', now() at time zone 'utc'
+    select p.id, topic_name, p.extension, probe_inserted_at, probe_inserted_at
     from unnest(probe_ids, read_extensions) as p(id, extension);
 
     perform set_config('role', role_name, true),
@@ -1149,8 +1151,15 @@ begin
             set_config('request.jwt.claim.role', role_name, true),
             set_config('request.headers', headers, true);
 
+    -- One lookup for every probe, by the full primary key.
+    visible_ids := array(
+      select m.id
+      from realtime.messages m
+      where m.inserted_at = probe_inserted_at
+        and m.id = any(probe_ids));
+
     read_allowed := array(
-      select exists(select 1 from realtime.messages m where m.id = p.id)
+      select p.id = any(visible_ids)
       from unnest(probe_ids) with ordinality as p(id, n)
       order by p.n);
 
@@ -4695,8 +4704,8 @@ CREATE TABLE realtime.messages (
     payload jsonb,
     event text,
     private boolean DEFAULT false,
-    updated_at timestamp without time zone DEFAULT now() NOT NULL,
-    inserted_at timestamp without time zone DEFAULT now() NOT NULL,
+    updated_at timestamp without time zone DEFAULT timezone('utc'::text, clock_timestamp()) NOT NULL,
+    inserted_at timestamp without time zone DEFAULT timezone('utc'::text, clock_timestamp()) NOT NULL,
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     binary_payload bytea,
     skip_broadcast boolean DEFAULT false NOT NULL
@@ -6868,5 +6877,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict cnKHGcyKua30LUW3w542WtEUWzAcOLK3WuucgexesljkBeccK3UvmdlfyzldORm
+\unrestrict 0CLtvOMqeVaNNXubB8Pn8d5jUOqDlDSOAW7rPEjpvHR9Zd4GAlNlgAx52DEvI8i
 
