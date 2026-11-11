@@ -1,0 +1,43 @@
+name: Auto Backup DB Schema
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Install PostgreSQL 17 Client
+        run: |
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Dump Remote Database Schema
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          mkdir -p supabase/migrations
+          /usr/lib/postgresql/17/bin/pg_dump "$SUPABASE_DB_URL" --schema-only --no-owner --no-acl -f supabase/migrations/esquema_actualizado.sql
+
+      - name: Verify generated file
+        run: |
+          ls -la supabase/migrations/esquema_actualizado.sql
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-update database schema backup"
+          file_pattern: "supabase/migrations/esquema_actualizado.sql"
