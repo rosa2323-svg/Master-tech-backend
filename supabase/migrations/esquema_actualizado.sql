@@ -2,10 +2,10 @@
 -- PostgreSQL database dump
 --
 
-\restrict oZoOfRoOi3Tbz5qmau8wgbmhFDet4UNDmcXylstjWmvHjNh0FOqViEGLKsXEbxi
+\restrict 3d50r8E7AuuCcsiGaCIEeIJmLowrO4nXUWxsX70NMvdtp3dZdx82W25DwlRN89b
 
 -- Dumped from database version 17.6
--- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg24.04+2)
+-- Dumped by pg_dump version 17.11 (Ubuntu 17.11-1.pgdg26.04+2)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -24,6 +24,13 @@ SET row_security = off;
 --
 
 CREATE SCHEMA auth;
+
+
+--
+-- Name: bot; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA bot;
 
 
 --
@@ -790,6 +797,14 @@ declare
     -- previous identity values for update/delete
     old_columns realtime.wal_column[];
 
+    -- the same values as wal2json sent them, which is what filters compare against
+    raw_columns realtime.wal_column[] =
+        array_agg((x->>'name', x->>'type', x->>'typeoid', x->'value', null, null)::realtime.wal_column)
+        from jsonb_array_elements(wal -> 'columns') x;
+    raw_old_columns realtime.wal_column[] =
+        array_agg((x->>'name', x->>'type', x->>'typeoid', x->'value', null, null)::realtime.wal_column)
+        from jsonb_array_elements(wal -> 'identity') x;
+
     error_record_exceeds_max_size boolean = octet_length(wal::text) > max_record_bytes;
 
     -- Primary jsonb output for record
@@ -948,10 +963,10 @@ begin
                         subs.entity = entity_
                         and subs.claims_role = working_role
                         and (
-                            realtime.is_visible_through_filters(columns, subs.filters)
+                            realtime.is_visible_through_filters(raw_columns, subs.filters)
                             or (
                               action = 'DELETE'
-                              and realtime.is_visible_through_filters(old_columns, subs.filters)
+                              and realtime.is_visible_through_filters(raw_old_columns, subs.filters)
                             )
                         )
             ) loop
@@ -1375,6 +1390,18 @@ begin
 
     return case when negate then not res else res end;
 end;
+$$;
+
+
+--
+-- Name: filters_hash(realtime.user_defined_filter[]); Type: FUNCTION; Schema: realtime; Owner: -
+--
+
+CREATE FUNCTION realtime.filters_hash(filters realtime.user_defined_filter[]) RETURNS bytea
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
+    AS $$
+  select pg_catalog.int8send(pg_catalog.hash_array_extended(filters, 0))
+      || pg_catalog.int8send(pg_catalog.hash_array_extended(filters, 1))
 $$;
 
 
@@ -1955,6 +1982,70 @@ $$;
 
 
 --
+-- Name: delete_lifecycle_objects(uuid[]); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.delete_lifecycle_objects(object_ids uuid[]) RETURNS TABLE(id uuid, is_delete_marker boolean, metadata jsonb)
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    object_id uuid;
+    deleted_row storage.objects%ROWTYPE;
+    deleted_ids uuid[];
+    deleted_markers boolean[];
+    deleted_metadata jsonb[];
+    bulk_deleted boolean := false;
+BEGIN
+    -- Surface pre-existing deferred violations instead of treating them as blocked rows.
+    SET CONSTRAINTS ALL IMMEDIATE;
+    PERFORM set_config('storage.allow_delete_query', 'true', true);
+
+    -- One subxact keeps the subxid cache from overflowing; rows return only once it commits.
+    BEGIN
+        WITH deleted AS (
+            DELETE FROM storage.objects AS object_row
+              WHERE object_row.id = ANY(object_ids) AND object_row.archived_at IS NOT NULL
+              RETURNING object_row.id, object_row.is_delete_marker, object_row.metadata
+        )
+        SELECT array_agg(deleted.id), array_agg(deleted.is_delete_marker), array_agg(deleted.metadata)
+          INTO deleted_ids, deleted_markers, deleted_metadata
+          FROM deleted;
+        bulk_deleted := true;
+    EXCEPTION
+        WHEN OTHERS THEN
+            -- User triggers may use insufficient_privilege to block a row.
+            IF SQLSTATE <> '42501' AND left(SQLSTATE, 2) IN ('08', '40', '42', '53', '55', '57', '58', 'XX') THEN
+                RAISE;
+            END IF;
+    END;
+    IF bulk_deleted THEN
+        RETURN QUERY SELECT * FROM unnest(deleted_ids, deleted_markers, deleted_metadata);
+        RETURN;
+    END IF;
+
+    FOREACH object_id IN ARRAY object_ids LOOP
+        BEGIN
+            DELETE FROM storage.objects AS object_row
+              WHERE object_row.id = object_id AND object_row.archived_at IS NOT NULL
+              RETURNING object_row.* INTO deleted_row;
+            IF FOUND THEN
+                id := deleted_row.id;
+                is_delete_marker := deleted_row.is_delete_marker;
+                metadata := deleted_row.metadata;
+                RETURN NEXT;
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                IF SQLSTATE <> '42501' AND left(SQLSTATE, 2) IN ('08', '40', '42', '53', '55', '57', '58', 'XX') THEN
+                    RAISE;
+                END IF;
+        END;
+    END LOOP;
+END;
+$$;
+
+
+--
 -- Name: enforce_bucket_lifecycle_service_role(); Type: FUNCTION; Schema: storage; Owner: -
 --
 
@@ -1963,14 +2054,9 @@ CREATE FUNCTION storage.enforce_bucket_lifecycle_service_role() RETURNS trigger
     SET search_path TO 'pg_catalog'
     AS $$
 BEGIN
-  IF current_user::text IS DISTINCT FROM TG_ARGV[0]
-     AND (
-       OLD.lifecycle_configuration IS DISTINCT FROM NEW.lifecycle_configuration
-       OR OLD.lifecycle_configuration_generation IS DISTINCT FROM NEW.lifecycle_configuration_generation
-     ) THEN
-    -- AFTER runs only after caller RLS has accepted the proposed row. The API
-    -- recognizes this specific error after rolling back its permission probe;
-    -- direct non-service writes still fail and cannot persist the change.
+  IF current_user::text IS DISTINCT FROM TG_ARGV[0] THEN
+    -- Keep this check AFTER caller RLS accepts the proposed row. The API
+    -- recognizes this exact signal after rolling back its permission probe.
     RAISE EXCEPTION 'bucket control columns may only be changed by the configured storage service role'
       USING ERRCODE = 'PST01',
             SCHEMA = TG_TABLE_SCHEMA,
@@ -1996,6 +2082,29 @@ begin
     end if;
     return new;
 end;
+$$;
+
+
+--
+-- Name: enforce_versioning_status_transition(); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.enforce_versioning_status_transition() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF NEW.versioning_status = OLD.versioning_status THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.versioning_status = 'DISABLED' OR
+       (OLD.versioning_status = 'DISABLED' AND NEW.versioning_status = 'SUSPENDED') THEN
+        RAISE EXCEPTION 'Cannot transition bucket versioning status from % to %',
+            OLD.versioning_status, NEW.versioning_status;
+    END IF;
+
+    RETURN NEW;
+END;
 $$;
 
 
@@ -2814,6 +2923,35 @@ $$;
 
 
 --
+-- Name: protect_active_lifecycle_states(); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.protect_active_lifecycle_states() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog'
+    AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM storage.bucket_lifecycle_states
+        WHERE bucket_id = OLD.id
+          AND NOT (
+              continuation IS NULL
+              OR (continuation @> '{"continuationVersion": 1}' AND continuation #> '{batch,inFlight}' IS NULL)
+          )
+    ) THEN
+        RAISE EXCEPTION 'update or delete on table "buckets" violates foreign key constraint "bucket_lifecycle_states_bucket_id_fkey" on table "bucket_lifecycle_states"'
+            USING ERRCODE = 'foreign_key_violation',
+                  DETAIL = format('Key (id)=(%s) is still referenced from table "bucket_lifecycle_states".', OLD.id),
+                  SCHEMA = 'storage',
+                  TABLE = 'bucket_lifecycle_states',
+                  CONSTRAINT = 'bucket_lifecycle_states_bucket_id_fkey';
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+
+--
 -- Name: protect_bucket_control_columns(); Type: FUNCTION; Schema: storage; Owner: -
 --
 
@@ -2886,6 +3024,80 @@ BEGIN
                   ERRCODE = '42501';
     END IF;
     RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: reconcile_lifecycle_state(text, boolean); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.reconcile_lifecycle_state(target_bucket_id text, policy_changed boolean) RETURNS void
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog'
+    AS $$
+DECLARE
+    bucket storage.buckets%ROWTYPE;
+    active boolean;
+    idle boolean;
+    state_generation uuid;
+BEGIN
+    SELECT * INTO bucket FROM storage.buckets WHERE id = target_bucket_id FOR NO KEY UPDATE;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+
+    SELECT continuation IS NULL OR (
+               continuation @> '{"continuationVersion": 1}'
+               AND continuation #> '{batch,inFlight}' IS NULL
+           ), generation
+    INTO idle, state_generation
+    FROM storage.bucket_lifecycle_states
+    WHERE bucket_id = target_bucket_id
+    FOR UPDATE;
+
+    IF bucket.lifecycle_configuration IS NULL THEN
+        DELETE FROM storage.bucket_lifecycle_states
+        WHERE bucket_id = target_bucket_id
+          AND idle IS TRUE;
+
+        UPDATE storage.bucket_lifecycle_states
+        SET next_run_at = clock_timestamp(), updated_at = clock_timestamp()
+        WHERE bucket_id = target_bucket_id
+          AND idle IS NOT TRUE;
+        RETURN;
+    END IF;
+
+    active := bucket.versioning_status <> 'DISABLED'
+        AND bucket.lifecycle_configuration @> '{"rules":[{"status":"Enabled"}]}'::jsonb;
+
+    -- The state row records the generation it was reconciled with so callers need not detect
+    -- policy changes. Rows without a recorded generation keep their work.
+    policy_changed := policy_changed OR (
+        state_generation IS NOT NULL AND state_generation <> bucket.lifecycle_configuration_generation
+    );
+
+    INSERT INTO storage.bucket_lifecycle_states AS state (bucket_id, generation, next_run_at)
+    VALUES (bucket.id, bucket.lifecycle_configuration_generation, CASE WHEN active THEN clock_timestamp() END)
+    ON CONFLICT (bucket_id) DO UPDATE
+    SET next_run_at = CASE
+            WHEN policy_changed THEN
+                CASE WHEN active OR idle IS NOT TRUE THEN clock_timestamp() END
+            ELSE EXCLUDED.next_run_at
+        END,
+        generation = EXCLUDED.generation,
+        claim_id = CASE WHEN policy_changed AND idle IS TRUE
+                        THEN NULL ELSE state.claim_id END,
+        claim_until = CASE WHEN policy_changed AND idle IS TRUE
+                           THEN NULL ELSE state.claim_until END,
+        continuation = CASE WHEN policy_changed AND idle IS TRUE
+                            THEN NULL ELSE state.continuation END,
+        failure_count = CASE WHEN policy_changed AND idle IS TRUE
+                             THEN 0 ELSE state.failure_count END,
+        last_error = CASE WHEN policy_changed AND idle IS TRUE
+                          THEN NULL ELSE state.last_error END,
+        updated_at = clock_timestamp()
+    WHERE policy_changed OR (state.next_run_at IS NULL AND EXCLUDED.next_run_at IS NOT NULL);
 END;
 $$;
 
@@ -3701,6 +3913,25 @@ END;
 $$;
 
 
+--
+-- Name: wake_lifecycle_state(); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.wake_lifecycle_state() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'pg_catalog'
+    AS $$
+BEGIN
+    IF TG_OP = 'INSERT' AND NEW.lifecycle_configuration IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    PERFORM storage.reconcile_lifecycle_state(NEW.id, false);
+    RETURN NEW;
+END;
+$$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -4420,65 +4651,154 @@ CREATE TABLE auth.webauthn_credentials (
 
 
 --
--- Name: carrito_items; Type: TABLE; Schema: public; Owner: -
+-- Name: conversations; Type: TABLE; Schema: bot; Owner: -
 --
 
-CREATE TABLE public.carrito_items (
-    id bigint NOT NULL,
-    carrito_id bigint NOT NULL,
-    producto_id bigint NOT NULL,
-    cantidad integer NOT NULL,
-    precio_snapshot numeric(12,2) NOT NULL,
-    fecha_agregado timestamp without time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_items_cantidad CHECK ((cantidad > 0)),
-    CONSTRAINT ck_items_precio CHECK ((precio_snapshot >= (0)::numeric))
+CREATE TABLE bot.conversations (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id bigint NOT NULL,
+    channel text DEFAULT 'web'::text NOT NULL,
+    summary text,
+    summarized_upto bigint DEFAULT 0 NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
 --
--- Name: carrito_items_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: messages; Type: TABLE; Schema: bot; Owner: -
 --
 
-ALTER TABLE public.carrito_items ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.carrito_items_id_seq
+CREATE TABLE bot.messages (
+    id bigint NOT NULL,
+    conversation_id uuid NOT NULL,
+    role text NOT NULL,
+    content text,
+    tool_calls jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    ui jsonb,
+    CONSTRAINT messages_role_check CHECK ((role = ANY (ARRAY['user'::text, 'assistant'::text, 'tool'::text])))
+);
+
+
+--
+-- Name: messages_id_seq; Type: SEQUENCE; Schema: bot; Owner: -
+--
+
+CREATE SEQUENCE bot.messages_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
-    CACHE 1
+    CACHE 1;
+
+
+--
+-- Name: messages_id_seq; Type: SEQUENCE OWNED BY; Schema: bot; Owner: -
+--
+
+ALTER SEQUENCE bot.messages_id_seq OWNED BY bot.messages.id;
+
+
+--
+-- Name: pending_actions; Type: TABLE; Schema: bot; Owner: -
+--
+
+CREATE TABLE bot.pending_actions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id bigint NOT NULL,
+    conversation_id uuid,
+    tool text NOT NULL,
+    args jsonb NOT NULL,
+    summary text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    resolved_at timestamp with time zone,
+    outcome text
 );
 
 
 --
--- Name: carritos; Type: TABLE; Schema: public; Owner: -
+-- Name: tool_audit; Type: TABLE; Schema: bot; Owner: -
 --
 
-CREATE TABLE public.carritos (
+CREATE TABLE bot.tool_audit (
     id bigint NOT NULL,
-    usuario_id bigint NOT NULL,
-    estado character varying(20) DEFAULT 'ACTIVO'::character varying NOT NULL,
-    fecha_creacion timestamp without time zone DEFAULT now() NOT NULL,
-    fecha_actualizacion timestamp without time zone DEFAULT now() NOT NULL,
-    fecha_cierre timestamp without time zone,
-    venta_id bigint,
-    CONSTRAINT ck_carritos_cierre CHECK (((((estado)::text = 'ACTIVO'::text) AND (fecha_cierre IS NULL)) OR (((estado)::text <> 'ACTIVO'::text) AND (fecha_cierre IS NOT NULL)))),
-    CONSTRAINT ck_carritos_estado CHECK (((estado)::text = ANY ((ARRAY['ACTIVO'::character varying, 'CONVERTIDO'::character varying, 'ABANDONADO'::character varying, 'VACIADO'::character varying])::text[]))),
-    CONSTRAINT ck_carritos_venta CHECK ((((estado)::text = 'CONVERTIDO'::text) = (venta_id IS NOT NULL)))
+    user_id bigint,
+    conversation_id uuid,
+    tool text NOT NULL,
+    args jsonb,
+    result jsonb,
+    status text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
 --
--- Name: carritos_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: tool_audit_id_seq; Type: SEQUENCE; Schema: bot; Owner: -
 --
 
-ALTER TABLE public.carritos ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
-    SEQUENCE NAME public.carritos_id_seq
+CREATE SEQUENCE bot.tool_audit_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
-    CACHE 1
+    CACHE 1;
+
+
+--
+-- Name: tool_audit_id_seq; Type: SEQUENCE OWNED BY; Schema: bot; Owner: -
+--
+
+ALTER SEQUENCE bot.tool_audit_id_seq OWNED BY bot.tool_audit.id;
+
+
+--
+-- Name: user_facts; Type: TABLE; Schema: bot; Owner: -
+--
+
+CREATE TABLE bot.user_facts (
+    user_id bigint NOT NULL,
+    key text NOT NULL,
+    value text NOT NULL,
+    source text DEFAULT 'bot'::text NOT NULL,
+    confidence real DEFAULT 0.8 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone
 );
+
+
+--
+-- Name: users; Type: TABLE; Schema: bot; Owner: -
+--
+
+CREATE TABLE bot.users (
+    id bigint NOT NULL,
+    project_id text NOT NULL,
+    external_user_id text NOT NULL,
+    role text,
+    display_name text,
+    locale text DEFAULT 'es'::text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: users_id_seq; Type: SEQUENCE; Schema: bot; Owner: -
+--
+
+CREATE SEQUENCE bot.users_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: users_id_seq; Type: SEQUENCE OWNED BY; Schema: bot; Owner: -
+--
+
+ALTER SEQUENCE bot.users_id_seq OWNED BY bot.users.id;
 
 
 --
@@ -4488,7 +4808,8 @@ ALTER TABLE public.carritos ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 CREATE TABLE public.categorias (
     id bigint NOT NULL,
     nombre character varying(100) NOT NULL,
-    descripcion character varying(255)
+    descripcion character varying(255),
+    imagen_url character varying
 );
 
 
@@ -4545,31 +4866,6 @@ ALTER SEQUENCE public.detalle_ventas_id_seq OWNED BY public.detalle_ventas.id;
 
 
 --
--- Name: perfiles; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.perfiles (
-    id bigint NOT NULL,
-    biografia character varying(255),
-    usuario_id bigint NOT NULL
-);
-
-
---
--- Name: perfiles_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-ALTER TABLE public.perfiles ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
-    SEQUENCE NAME public.perfiles_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1
-);
-
-
---
 -- Name: productos; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4605,20 +4901,6 @@ CREATE SEQUENCE public.productos_id_seq
 --
 
 ALTER SEQUENCE public.productos_id_seq OWNED BY public.productos.id;
-
-
---
--- Name: spring_ai_chat_memory; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.spring_ai_chat_memory (
-    conversation_id character varying(100) NOT NULL,
-    content text NOT NULL,
-    type character varying(10) NOT NULL,
-    "timestamp" timestamp without time zone NOT NULL,
-    sequence_id bigint NOT NULL,
-    CONSTRAINT spring_ai_chat_memory_type_check CHECK (((type)::text = ANY ((ARRAY['USER'::character varying, 'ASSISTANT'::character varying, 'SYSTEM'::character varying, 'TOOL'::character varying])::text[])))
-);
 
 
 --
@@ -4708,7 +4990,8 @@ CREATE TABLE realtime.messages (
     inserted_at timestamp without time zone DEFAULT timezone('utc'::text, clock_timestamp()) NOT NULL,
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     binary_payload bytea,
-    skip_broadcast boolean DEFAULT false NOT NULL
+    skip_broadcast boolean DEFAULT false NOT NULL,
+    expires_at timestamp without time zone
 )
 PARTITION BY RANGE (inserted_at);
 
@@ -4756,6 +5039,31 @@ ALTER TABLE realtime.subscription ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTI
 
 
 --
+-- Name: bucket_lifecycle_states; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.bucket_lifecycle_states (
+    bucket_id text NOT NULL,
+    generation uuid,
+    next_run_at timestamp with time zone,
+    claim_id uuid,
+    claim_until timestamp with time zone,
+    continuation jsonb,
+    last_started_at timestamp with time zone,
+    last_completed_at timestamp with time zone,
+    last_success_at timestamp with time zone,
+    last_result jsonb,
+    failure_count integer DEFAULT 0 NOT NULL,
+    last_error jsonb,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT bucket_lifecycle_continuation_object_check CHECK (((continuation IS NULL) OR (jsonb_typeof(continuation) = 'object'::text))),
+    CONSTRAINT bucket_lifecycle_failure_count_check CHECK ((failure_count >= 0)),
+    CONSTRAINT bucket_lifecycle_last_result_object_check CHECK (((last_result IS NULL) OR (jsonb_typeof(last_result) = 'object'::text))),
+    CONSTRAINT bucket_lifecycle_recovery_due_check CHECK (((next_run_at IS NOT NULL) OR (NOT jsonb_path_exists(COALESCE(continuation, '{}'::jsonb), '$."batch"."inFlight"'::jsonpath))))
+);
+
+
+--
 -- Name: buckets; Type: TABLE; Schema: storage; Owner: -
 --
 
@@ -4781,7 +5089,6 @@ CASE
     ELSE false
 END))),
     CONSTRAINT buckets_lifecycle_configuration_standard_only_check CHECK (((type = 'STANDARD'::storage.buckettype) OR ((lifecycle_configuration IS NULL) AND (lifecycle_configuration_generation IS NULL)))),
-    CONSTRAINT buckets_versioning_dark_check CHECK ((versioning_status = 'DISABLED'::text)),
     CONSTRAINT buckets_versioning_standard_only_check CHECK (((type = 'STANDARD'::storage.buckettype) OR (versioning_status = 'DISABLED'::text))),
     CONSTRAINT buckets_versioning_status_check CHECK ((versioning_status = ANY (ARRAY['DISABLED'::text, 'ENABLED'::text, 'SUSPENDED'::text])))
 );
@@ -4818,6 +5125,19 @@ CREATE TABLE storage.buckets_vectors (
     type storage.buckettype DEFAULT 'VECTOR'::storage.buckettype NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: lifecycle_abandoned_artifacts; Type: TABLE; Schema: storage; Owner: -
+--
+
+CREATE TABLE storage.lifecycle_abandoned_artifacts (
+    bucket_id text NOT NULL,
+    key text NOT NULL,
+    name text NOT NULL,
+    version text,
+    attempted_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -4921,6 +5241,27 @@ CREATE TABLE storage.vector_indexes (
 --
 
 ALTER TABLE ONLY auth.refresh_tokens ALTER COLUMN id SET DEFAULT nextval('auth.refresh_tokens_id_seq'::regclass);
+
+
+--
+-- Name: messages id; Type: DEFAULT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.messages ALTER COLUMN id SET DEFAULT nextval('bot.messages_id_seq'::regclass);
+
+
+--
+-- Name: tool_audit id; Type: DEFAULT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.tool_audit ALTER COLUMN id SET DEFAULT nextval('bot.tool_audit_id_seq'::regclass);
+
+
+--
+-- Name: users id; Type: DEFAULT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.users ALTER COLUMN id SET DEFAULT nextval('bot.users_id_seq'::regclass);
 
 
 --
@@ -5271,19 +5612,59 @@ ALTER TABLE ONLY auth.webauthn_credentials
 
 
 --
--- Name: carrito_items carrito_items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: conversations conversations_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
 --
 
-ALTER TABLE ONLY public.carrito_items
-    ADD CONSTRAINT carrito_items_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY bot.conversations
+    ADD CONSTRAINT conversations_pkey PRIMARY KEY (id);
 
 
 --
--- Name: carritos carritos_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
 --
 
-ALTER TABLE ONLY public.carritos
-    ADD CONSTRAINT carritos_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY bot.messages
+    ADD CONSTRAINT messages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: pending_actions pending_actions_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.pending_actions
+    ADD CONSTRAINT pending_actions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tool_audit tool_audit_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.tool_audit
+    ADD CONSTRAINT tool_audit_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_facts user_facts_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.user_facts
+    ADD CONSTRAINT user_facts_pkey PRIMARY KEY (user_id, key);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: users users_project_id_external_user_id_key; Type: CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.users
+    ADD CONSTRAINT users_project_id_external_user_id_key UNIQUE (project_id, external_user_id);
 
 
 --
@@ -5303,14 +5684,6 @@ ALTER TABLE ONLY public.detalle_ventas
 
 
 --
--- Name: perfiles perfiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.perfiles
-    ADD CONSTRAINT perfiles_pkey PRIMARY KEY (id);
-
-
---
 -- Name: productos productos_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5319,43 +5692,11 @@ ALTER TABLE ONLY public.productos
 
 
 --
--- Name: spring_ai_chat_memory spring_ai_chat_memory_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.spring_ai_chat_memory
-    ADD CONSTRAINT spring_ai_chat_memory_pkey PRIMARY KEY (conversation_id, sequence_id);
-
-
---
--- Name: perfiles uktlt2ghp1wj8o1qco6mt6e9j14; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.perfiles
-    ADD CONSTRAINT uktlt2ghp1wj8o1qco6mt6e9j14 UNIQUE (usuario_id);
-
-
---
 -- Name: usuarios unique_dni; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.usuarios
     ADD CONSTRAINT unique_dni UNIQUE (dni);
-
-
---
--- Name: carritos uq_carritos_venta; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.carritos
-    ADD CONSTRAINT uq_carritos_venta UNIQUE (venta_id);
-
-
---
--- Name: carrito_items uq_items_carrito_producto; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.carrito_items
-    ADD CONSTRAINT uq_items_carrito_producto UNIQUE (carrito_id, producto_id);
 
 
 --
@@ -5423,6 +5764,14 @@ ALTER TABLE ONLY realtime.schema_migrations
 
 
 --
+-- Name: bucket_lifecycle_states bucket_lifecycle_states_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.bucket_lifecycle_states
+    ADD CONSTRAINT bucket_lifecycle_states_pkey PRIMARY KEY (bucket_id);
+
+
+--
 -- Name: buckets_analytics buckets_analytics_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
 --
 
@@ -5444,6 +5793,14 @@ ALTER TABLE ONLY storage.buckets
 
 ALTER TABLE ONLY storage.buckets_vectors
     ADD CONSTRAINT buckets_vectors_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: lifecycle_abandoned_artifacts lifecycle_abandoned_artifacts_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.lifecycle_abandoned_artifacts
+    ADD CONSTRAINT lifecycle_abandoned_artifacts_pkey PRIMARY KEY (bucket_id, key);
 
 
 --
@@ -6013,59 +6370,31 @@ CREATE INDEX webauthn_credentials_user_id_idx ON auth.webauthn_credentials USING
 
 
 --
--- Name: idx_carritos_activos_act; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_audit_user; Type: INDEX; Schema: bot; Owner: -
 --
 
-CREATE INDEX idx_carritos_activos_act ON public.carritos USING btree (fecha_actualizacion) WHERE ((estado)::text = 'ACTIVO'::text);
-
-
---
--- Name: idx_carritos_estado_cierre; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_carritos_estado_cierre ON public.carritos USING btree (estado, fecha_cierre);
+CREATE INDEX ix_audit_user ON bot.tool_audit USING btree (user_id, created_at DESC);
 
 
 --
--- Name: idx_carritos_usuario; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_conv_user; Type: INDEX; Schema: bot; Owner: -
 --
 
-CREATE INDEX idx_carritos_usuario ON public.carritos USING btree (usuario_id);
-
-
---
--- Name: idx_chat_memory_conv_ts; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_chat_memory_conv_ts ON public.spring_ai_chat_memory USING btree (conversation_id, "timestamp" DESC);
+CREATE INDEX ix_conv_user ON bot.conversations USING btree (user_id, last_at DESC);
 
 
 --
--- Name: idx_items_producto; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_msg_conv; Type: INDEX; Schema: bot; Owner: -
 --
 
-CREATE INDEX idx_items_producto ON public.carrito_items USING btree (producto_id);
-
-
---
--- Name: ix_carrito_items_carrito_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_carrito_items_carrito_id ON public.carrito_items USING btree (carrito_id);
+CREATE INDEX ix_msg_conv ON bot.messages USING btree (conversation_id, id);
 
 
 --
--- Name: ix_carrito_items_producto_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_pending_user; Type: INDEX; Schema: bot; Owner: -
 --
 
-CREATE INDEX ix_carrito_items_producto_id ON public.carrito_items USING btree (producto_id);
-
-
---
--- Name: ix_carritos_usuario_estado; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_carritos_usuario_estado ON public.carritos USING btree (usuario_id, estado);
+CREATE INDEX ix_pending_user ON bot.pending_actions USING btree (user_id) WHERE (resolved_at IS NULL);
 
 
 --
@@ -6132,20 +6461,6 @@ CREATE INDEX ix_ventas_usuario_id ON public.ventas USING btree (usuario_id);
 
 
 --
--- Name: uq_carrito_activo_por_usuario; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX uq_carrito_activo_por_usuario ON public.carritos USING btree (usuario_id) WHERE ((estado)::text = 'ACTIVO'::text);
-
-
---
--- Name: ux_carrito_items_carrito_producto; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX ux_carrito_items_carrito_producto ON public.carrito_items USING btree (carrito_id, producto_id);
-
-
---
 -- Name: ux_ventas_numero_orden; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6160,17 +6475,17 @@ CREATE INDEX ix_realtime_subscription_entity ON realtime.subscription USING btre
 
 
 --
--- Name: messages_inserted_at_topic_index; Type: INDEX; Schema: realtime; Owner: -
+-- Name: messages_replay_index; Type: INDEX; Schema: realtime; Owner: -
 --
 
-CREATE INDEX messages_inserted_at_topic_index ON ONLY realtime.messages USING btree (inserted_at DESC, topic) WHERE ((extension = 'broadcast'::text) AND (private IS TRUE));
+CREATE INDEX messages_replay_index ON ONLY realtime.messages USING btree (topic, inserted_at DESC, COALESCE(expires_at, 'infinity'::timestamp without time zone)) WHERE ((extension = 'broadcast'::text) AND (private = true));
 
 
 --
--- Name: subscription_subscription_id_entity_filters_action_filter_selec; Type: INDEX; Schema: realtime; Owner: -
+-- Name: subscription_subscription_id_entity_filters_hash_key; Type: INDEX; Schema: realtime; Owner: -
 --
 
-CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_action_filter_selec ON realtime.subscription USING btree (subscription_id, entity, filters, action_filter, COALESCE(selected_columns, '{}'::text[]));
+CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_hash_key ON realtime.subscription USING btree (subscription_id, entity, realtime.filters_hash(filters), action_filter, COALESCE(selected_columns, '{}'::text[]));
 
 
 --
@@ -6178,6 +6493,13 @@ CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_action_filter_se
 --
 
 CREATE UNIQUE INDEX bname ON storage.buckets USING btree (name);
+
+
+--
+-- Name: bucket_lifecycle_states_due_idx; Type: INDEX; Schema: storage; Owner: -
+--
+
+CREATE INDEX bucket_lifecycle_states_due_idx ON storage.bucket_lifecycle_states USING btree (next_run_at, bucket_id) WHERE (next_run_at IS NOT NULL);
 
 
 --
@@ -6230,10 +6552,31 @@ CREATE UNIQUE INDEX idx_objects_null_version ON storage.objects USING btree (buc
 
 
 --
+-- Name: lifecycle_abandoned_artifacts_attempted_at_idx; Type: INDEX; Schema: storage; Owner: -
+--
+
+CREATE INDEX lifecycle_abandoned_artifacts_attempted_at_idx ON storage.lifecycle_abandoned_artifacts USING btree (attempted_at);
+
+
+--
 -- Name: name_prefix_search; Type: INDEX; Schema: storage; Owner: -
 --
 
 CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops);
+
+
+--
+-- Name: objects_archived_due_idx; Type: INDEX; Schema: storage; Owner: -
+--
+
+CREATE INDEX objects_archived_due_idx ON storage.objects USING btree (bucket_id, archived_at, name COLLATE "C") INCLUDE (id, version, is_delete_marker) WHERE (archived_at IS NOT NULL);
+
+
+--
+-- Name: objects_archived_order_uq; Type: INDEX; Schema: storage; Owner: -
+--
+
+CREATE UNIQUE INDEX objects_archived_order_uq ON storage.objects USING btree (bucket_id, name COLLATE "C", archived_at) WHERE (archived_at IS NOT NULL);
 
 
 --
@@ -6262,6 +6605,20 @@ CREATE TRIGGER tr_check_filters BEFORE INSERT OR UPDATE ON realtime.subscription
 --
 
 CREATE TRIGGER enforce_bucket_name_length_trigger BEFORE INSERT OR UPDATE OF name ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.enforce_bucket_name_length();
+
+
+--
+-- Name: buckets enforce_versioning_status_transition; Type: TRIGGER; Schema: storage; Owner: -
+--
+
+CREATE TRIGGER enforce_versioning_status_transition BEFORE UPDATE OF versioning_status ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.enforce_versioning_status_transition();
+
+
+--
+-- Name: buckets protect_active_lifecycle_states; Type: TRIGGER; Schema: storage; Owner: -
+--
+
+CREATE TRIGGER protect_active_lifecycle_states BEFORE DELETE ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.protect_active_lifecycle_states();
 
 
 --
@@ -6304,6 +6661,20 @@ CREATE TRIGGER protect_objects_delete BEFORE DELETE ON storage.objects FOR EACH 
 --
 
 CREATE TRIGGER update_objects_updated_at BEFORE UPDATE ON storage.objects FOR EACH ROW EXECUTE FUNCTION storage.update_updated_at_column();
+
+
+--
+-- Name: buckets wake_lifecycle_on_policy_write; Type: TRIGGER; Schema: storage; Owner: -
+--
+
+CREATE TRIGGER wake_lifecycle_on_policy_write AFTER INSERT OR UPDATE OF lifecycle_configuration_generation ON storage.buckets FOR EACH ROW EXECUTE FUNCTION storage.wake_lifecycle_state();
+
+
+--
+-- Name: buckets wake_lifecycle_on_versioning_enable; Type: TRIGGER; Schema: storage; Owner: -
+--
+
+CREATE TRIGGER wake_lifecycle_on_versioning_enable AFTER UPDATE OF versioning_status ON storage.buckets FOR EACH ROW WHEN ((new.lifecycle_configuration IS NOT NULL)) EXECUTE FUNCTION storage.wake_lifecycle_state();
 
 
 --
@@ -6499,19 +6870,43 @@ ALTER TABLE ONLY auth.webauthn_credentials
 
 
 --
--- Name: carritos fk_carritos_usuario; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: conversations conversations_user_id_fkey; Type: FK CONSTRAINT; Schema: bot; Owner: -
 --
 
-ALTER TABLE ONLY public.carritos
-    ADD CONSTRAINT fk_carritos_usuario FOREIGN KEY (usuario_id) REFERENCES public.usuarios(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY bot.conversations
+    ADD CONSTRAINT conversations_user_id_fkey FOREIGN KEY (user_id) REFERENCES bot.users(id) ON DELETE CASCADE;
 
 
 --
--- Name: carritos fk_carritos_venta; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Name: messages messages_conversation_id_fkey; Type: FK CONSTRAINT; Schema: bot; Owner: -
 --
 
-ALTER TABLE ONLY public.carritos
-    ADD CONSTRAINT fk_carritos_venta FOREIGN KEY (venta_id) REFERENCES public.ventas(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY bot.messages
+    ADD CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES bot.conversations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: pending_actions pending_actions_user_id_fkey; Type: FK CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.pending_actions
+    ADD CONSTRAINT pending_actions_user_id_fkey FOREIGN KEY (user_id) REFERENCES bot.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: tool_audit tool_audit_user_id_fkey; Type: FK CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.tool_audit
+    ADD CONSTRAINT tool_audit_user_id_fkey FOREIGN KEY (user_id) REFERENCES bot.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_facts user_facts_user_id_fkey; Type: FK CONSTRAINT; Schema: bot; Owner: -
+--
+
+ALTER TABLE ONLY bot.user_facts
+    ADD CONSTRAINT user_facts_user_id_fkey FOREIGN KEY (user_id) REFERENCES bot.users(id) ON DELETE CASCADE;
 
 
 --
@@ -6520,22 +6915,6 @@ ALTER TABLE ONLY public.carritos
 
 ALTER TABLE ONLY public.productos
     ADD CONSTRAINT fk_categoria FOREIGN KEY (categoria_id) REFERENCES public.categorias(id) ON DELETE RESTRICT;
-
-
---
--- Name: carrito_items fk_items_carrito; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.carrito_items
-    ADD CONSTRAINT fk_items_carrito FOREIGN KEY (carrito_id) REFERENCES public.carritos(id) ON DELETE CASCADE;
-
-
---
--- Name: carrito_items fk_items_producto; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.carrito_items
-    ADD CONSTRAINT fk_items_producto FOREIGN KEY (producto_id) REFERENCES public.productos(id) ON DELETE RESTRICT;
 
 
 --
@@ -6555,19 +6934,19 @@ ALTER TABLE ONLY public.detalle_ventas
 
 
 --
--- Name: perfiles fkowo6q4m6x5tklwmure6pp4dae; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.perfiles
-    ADD CONSTRAINT fkowo6q4m6x5tklwmure6pp4dae FOREIGN KEY (usuario_id) REFERENCES public.usuarios(id);
-
-
---
 -- Name: ventas ventas_usuario_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ventas
     ADD CONSTRAINT ventas_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios(id);
+
+
+--
+-- Name: bucket_lifecycle_states bucket_lifecycle_states_bucket_id_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
+--
+
+ALTER TABLE ONLY storage.bucket_lifecycle_states
+    ADD CONSTRAINT bucket_lifecycle_states_bucket_id_fkey FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id) ON DELETE CASCADE;
 
 
 --
@@ -6707,16 +7086,40 @@ ALTER TABLE auth.sso_providers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: carrito_items; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: conversations; Type: ROW SECURITY; Schema: bot; Owner: -
 --
 
-ALTER TABLE public.carrito_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bot.conversations ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: carritos; Type: ROW SECURITY; Schema: public; Owner: -
+-- Name: messages; Type: ROW SECURITY; Schema: bot; Owner: -
 --
 
-ALTER TABLE public.carritos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bot.messages ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: pending_actions; Type: ROW SECURITY; Schema: bot; Owner: -
+--
+
+ALTER TABLE bot.pending_actions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: tool_audit; Type: ROW SECURITY; Schema: bot; Owner: -
+--
+
+ALTER TABLE bot.tool_audit ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_facts; Type: ROW SECURITY; Schema: bot; Owner: -
+--
+
+ALTER TABLE bot.user_facts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: bot; Owner: -
+--
+
+ALTER TABLE bot.users ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: categorias; Type: ROW SECURITY; Schema: public; Owner: -
@@ -6731,22 +7134,10 @@ ALTER TABLE public.categorias ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.detalle_ventas ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: perfiles; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.perfiles ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: productos; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
 ALTER TABLE public.productos ENABLE ROW LEVEL SECURITY;
-
---
--- Name: spring_ai_chat_memory; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.spring_ai_chat_memory ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: usuarios; Type: ROW SECURITY; Schema: public; Owner: -
@@ -6767,6 +7158,12 @@ ALTER TABLE public.ventas ENABLE ROW LEVEL SECURITY;
 ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: bucket_lifecycle_states; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.bucket_lifecycle_states ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: buckets; Type: ROW SECURITY; Schema: storage; Owner: -
 --
 
@@ -6783,6 +7180,12 @@ ALTER TABLE storage.buckets_analytics ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE storage.buckets_vectors ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: lifecycle_abandoned_artifacts; Type: ROW SECURITY; Schema: storage; Owner: -
+--
+
+ALTER TABLE storage.lifecycle_abandoned_artifacts ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: migrations; Type: ROW SECURITY; Schema: storage; Owner: -
@@ -6877,5 +7280,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict oZoOfRoOi3Tbz5qmau8wgbmhFDet4UNDmcXylstjWmvHjNh0FOqViEGLKsXEbxi
+\unrestrict 3d50r8E7AuuCcsiGaCIEeIJmLowrO4nXUWxsX70NMvdtp3dZdx82W25DwlRN89b
 
