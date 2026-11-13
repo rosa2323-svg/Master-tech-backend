@@ -9,6 +9,7 @@ import utp.mastertech.mastertech.model.Venta;
 import java.util.List;
 import java.util.Optional;
 import java.time.LocalDateTime;
+import java.math.BigDecimal;
 
 @Repository
 public interface VentaRepository extends JpaRepository<Venta, Long> {
@@ -40,6 +41,16 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
     List<TendenciaVentaProjection> tendenciaVentas(@Param("granularidad") String granularidad,
                                                    @Param("desde") LocalDateTime desde,
                                                    @Param("hasta") LocalDateTime hasta);
+
+    @Query(value = """
+            SELECT COALESCE(SUM(v.total), 0)
+            FROM ventas v
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            """, nativeQuery = true)
+    BigDecimal ingresoEntre(@Param("desde") LocalDateTime desde,
+                            @Param("hasta") LocalDateTime hasta);
 
 
 }

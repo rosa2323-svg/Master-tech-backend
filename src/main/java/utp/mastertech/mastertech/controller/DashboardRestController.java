@@ -3,6 +3,8 @@ package utp.mastertech.mastertech.controller;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
+import utp.mastertech.mastertech.dto.IngresoDiarioDTO;
+import utp.mastertech.mastertech.dto.ProductosVendidosDTO;
 import utp.mastertech.mastertech.dto.TendenciaPuntoDTO;
 import utp.mastertech.mastertech.service.DashboardService;
 
@@ -24,5 +26,19 @@ public class DashboardRestController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
         return dashboardService.tendenciaVentas(desde, hasta, agrupar);
+    }
+
+    // GET /api/v1/dashboard/productos-vendidos?desde=2026-10-14&hasta=2026-11-13
+    @GetMapping("/productos-vendidos")
+    public ProductosVendidosDTO productosVendidos(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
+        return dashboardService.productosVendidos(desde, hasta);
+    }
+
+    // GET /api/v1/dashboard/ingreso-diario
+    @GetMapping("/ingreso-diario")
+    public IngresoDiarioDTO ingresoDiario() {
+        return dashboardService.ingresoDiario();
     }
 }

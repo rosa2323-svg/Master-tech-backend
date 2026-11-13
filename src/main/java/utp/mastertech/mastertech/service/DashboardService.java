@@ -2,11 +2,15 @@ package utp.mastertech.mastertech.service;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import utp.mastertech.mastertech.dto.IngresoDiarioDTO;
+import utp.mastertech.mastertech.dto.ProductosVendidosDTO;
 import utp.mastertech.mastertech.dto.TendenciaPuntoDTO;
+import utp.mastertech.mastertech.repository.DetalleVentaRepository;
 import utp.mastertech.mastertech.repository.TendenciaVentaProjection;
 import utp.mastertech.mastertech.repository.VentaRepository;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -25,6 +29,9 @@ public class DashboardService {
 
     @Autowired
     private VentaRepository ventaRepository;
+
+    @Autowired
+    private DetalleVentaRepository detalleVentaRepository;
 
     /** Serie de ventas agrupada por dia | semana | mes, con ceros en los periodos sin ventas. */
     public List<TendenciaPuntoDTO> tendenciaVentas(LocalDate desde, LocalDate hasta, String agrupar) {
@@ -63,6 +70,42 @@ public class DashboardService {
             };
         }
         return serie;
+    }
+
+    /** Unidades vendidas del periodo, segmentadas por categoría y con el top 5 de productos. */
+    public ProductosVendidosDTO productosVendidos(LocalDate desde, LocalDate hasta) {
+        LocalDate fin = hasta != null ? hasta : LocalDate.now();
+        LocalDate ini = desde != null ? desde : fin.minusDays(29);
+        if (ini.isAfter(fin)) {
+            throw new IllegalArgumentException("'desde' no puede ser posterior a 'hasta'");
+        }
+        var d = ini.atStartOfDay();
+        var h = fin.plusDays(1).atStartOfDay();
+
+        List<ProductosVendidosDTO.Item> categorias = detalleVentaRepository.unidadesPorCategoria(d, h).stream()
+                .map(p -> new ProductosVendidosDTO.Item(p.getId(), p.getNombre(), p.getUnidades(), p.getIngreso()))
+                .toList();
+        List<ProductosVendidosDTO.Item> top = detalleVentaRepository.topProductos(d, h, 5).stream()
+                .map(p -> new ProductosVendidosDTO.Item(p.getId(), p.getNombre(), p.getUnidades(), p.getIngreso()))
+                .toList();
+
+        long total = categorias.stream().mapToLong(ProductosVendidosDTO.Item::getUnidades).sum();
+        return new ProductosVendidosDTO(total, categorias, top);
+    }
+
+    /** Ingreso de hoy, el de ayer y la variación porcentual entre ambos. */
+    public IngresoDiarioDTO ingresoDiario() {
+        LocalDate hoy = LocalDate.now();
+        BigDecimal ingresoHoy = ventaRepository.ingresoEntre(hoy.atStartOfDay(), hoy.plusDays(1).atStartOfDay());
+        BigDecimal ingresoAyer = ventaRepository.ingresoEntre(hoy.minusDays(1).atStartOfDay(), hoy.atStartOfDay());
+
+        BigDecimal variacion = ingresoAyer.signum() == 0
+                ? null
+                : ingresoHoy.subtract(ingresoAyer)
+                .multiply(BigDecimal.valueOf(100))
+                .divide(ingresoAyer, 1, RoundingMode.HALF_UP);
+
+        return new IngresoDiarioDTO(ingresoHoy, ingresoAyer, variacion);
     }
 
     private LocalDate truncar(LocalDate fecha, String modo) {
