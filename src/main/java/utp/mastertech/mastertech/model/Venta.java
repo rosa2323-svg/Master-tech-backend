@@ -31,6 +31,6 @@ public class Venta {
     @JoinColumn(name = "usuario_id")
     private Usuario usuario;
 
-    @Transient
+    @Column(nullable = false)
     private String estado = "Pagado";
 }

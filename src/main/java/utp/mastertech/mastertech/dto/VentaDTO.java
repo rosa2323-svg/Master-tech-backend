@@ -27,5 +27,9 @@ public class VentaDTO {
 
     private String usuarioEmail;
 
+    private String usuarioDireccion;
+
+    private String usuarioTelefono;
+
     private List<DetalleVentaDTO> detalles;
 }
