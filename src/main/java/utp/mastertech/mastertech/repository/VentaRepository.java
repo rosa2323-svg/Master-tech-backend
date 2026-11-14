@@ -18,6 +18,8 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
 
     Optional<Venta> findByNumeroOrden(String numeroOrden);
 
+    List<Venta> findByEstadoInOrderByIdDesc(List<String> estados);
+
 
     @Query("SELECT v FROM Venta v LEFT JOIN v.usuario u WHERE " +
             "CAST(v.id AS string) LIKE %:keyword% OR " +

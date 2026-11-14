@@ -155,10 +155,7 @@ public class VentaService {
     }
 
     public List<Venta> listarParaDespacho() {
-        return ventaRepository.findAll().stream()
-                .filter(v -> FLUJO_DESPACHO.contains(v.getEstado()))
-                .sorted(Comparator.comparing(Venta::getId).reversed())
-                .collect(Collectors.toList());
+        return ventaRepository.findByEstadoInOrderByIdDesc(FLUJO_DESPACHO);
     }
 
     @Transactional
