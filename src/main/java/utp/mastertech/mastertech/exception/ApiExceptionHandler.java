@@ -13,6 +13,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -83,6 +84,13 @@ public class ApiExceptionHandler {
     public ResponseEntity<ErrorResponse> handleExterno(RuntimeException ex, HttpServletRequest request) {
         log.error("Fallo en servicio externo", ex);
         return responder(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException ex, HttpServletRequest request) {
+        HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
+        String mensaje = ex.getReason() != null ? ex.getReason() : status.getReasonPhrase();
+        return responder(status, mensaje, request);
     }
 
     @ExceptionHandler(Exception.class)
