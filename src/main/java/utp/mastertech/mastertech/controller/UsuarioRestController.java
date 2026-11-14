@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/api/v1/usuarios")
 public class UsuarioRestController {
 
-    private static final Set<String> ROLES = Set.of("USER", "ADMIN");
+    private static final Set<String> ROLES = Set.of("USER", "ADMIN", "DESPACHADOR");
 
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -108,7 +108,7 @@ public class UsuarioRestController {
 
     private void validarRol(String rol) {
         if (rol != null && !ROLES.contains(rol)) {
-            throw new IllegalArgumentException("Rol no válido. Usa USER o ADMIN.");
+            throw new IllegalArgumentException("Rol no válido. Usa USER, ADMIN o DESPACHADOR.");
         }
     }
 
