@@ -52,5 +52,15 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
     BigDecimal ingresoEntre(@Param("desde") LocalDateTime desde,
                             @Param("hasta") LocalDateTime hasta);
 
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM ventas v
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            """, nativeQuery = true)
+    Long ordenesEntre(@Param("desde") LocalDateTime desde,
+                      @Param("hasta") LocalDateTime hasta);
+
 
 }

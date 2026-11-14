@@ -52,4 +52,23 @@ public interface DetalleVentaRepository
     List<VentaAgrupadaProjection> topProductos(@Param("desde") LocalDateTime desde,
                                                @Param("hasta") LocalDateTime hasta,
                                                @Param("limite") int limite);
+
+    @Query(value = """
+            SELECT p.id                AS id,
+                   p.nombre            AS nombre,
+                   SUM(d.cantidad)     AS unidades,
+                   SUM(d.subtotal)     AS ingreso
+            FROM detalle_ventas d
+            JOIN ventas v    ON v.id = d.venta_id
+            JOIN productos p ON p.id = d.producto_id
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            GROUP BY p.id, p.nombre
+            ORDER BY ingreso DESC, p.nombre
+            LIMIT :limite
+            """, nativeQuery = true)
+    List<VentaAgrupadaProjection> topProductosPorIngreso(@Param("desde") LocalDateTime desde,
+                                                         @Param("hasta") LocalDateTime hasta,
+                                                         @Param("limite") int limite);
 }

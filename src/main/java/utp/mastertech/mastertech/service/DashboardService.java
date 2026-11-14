@@ -8,6 +8,8 @@ import utp.mastertech.mastertech.dto.TendenciaPuntoDTO;
 import utp.mastertech.mastertech.repository.DetalleVentaRepository;
 import utp.mastertech.mastertech.repository.TendenciaVentaProjection;
 import utp.mastertech.mastertech.repository.VentaRepository;
+import utp.mastertech.mastertech.dto.ConcentracionIngresosDTO;
+import utp.mastertech.mastertech.dto.IngresoPromedioDTO;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -20,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.temporal.ChronoUnit;
 
 @Service
 public class DashboardService {
@@ -106,6 +109,59 @@ public class DashboardService {
                 .divide(ingresoAyer, 1, RoundingMode.HALF_UP);
 
         return new IngresoDiarioDTO(ingresoHoy, ingresoAyer, variacion);
+    }
+
+    public IngresoPromedioDTO ingresoPromedio(LocalDate desde, LocalDate hasta) {
+        LocalDate fin = hasta != null ? hasta : LocalDate.now();
+        LocalDate ini = desde != null ? desde : fin.minusDays(29);
+        if (ini.isAfter(fin)) {
+            throw new IllegalArgumentException("'desde' no puede ser posterior a 'hasta'");
+        }
+        var d = ini.atStartOfDay();
+        var h = fin.plusDays(1).atStartOfDay();
+
+        BigDecimal total = ventaRepository.ingresoEntre(d, h);
+        long ordenes = ventaRepository.ordenesEntre(d, h);
+        long dias = ChronoUnit.DAYS.between(ini, fin) + 1;
+
+        BigDecimal promedioDiario = total.divide(BigDecimal.valueOf(dias), 2, RoundingMode.HALF_UP);
+        BigDecimal ticket = ordenes == 0
+                ? BigDecimal.ZERO
+                : total.divide(BigDecimal.valueOf(ordenes), 2, RoundingMode.HALF_UP);
+
+        return new IngresoPromedioDTO(total, ordenes, dias, promedioDiario, ticket);
+    }
+
+    public ConcentracionIngresosDTO concentracionIngresos(LocalDate desde, LocalDate hasta) {
+        LocalDate fin = hasta != null ? hasta : LocalDate.now();
+        LocalDate ini = desde != null ? desde : fin.minusDays(29);
+        if (ini.isAfter(fin)) {
+            throw new IllegalArgumentException("'desde' no puede ser posterior a 'hasta'");
+        }
+        var d = ini.atStartOfDay();
+        var h = fin.plusDays(1).atStartOfDay();
+
+        BigDecimal total = ventaRepository.ingresoEntre(d, h);
+
+        List<ConcentracionIngresosDTO.Item> productos = detalleVentaRepository.topProductosPorIngreso(d, h, 5).stream()
+                .map(p -> new ConcentracionIngresosDTO.Item(
+                        p.getId(), p.getNombre(), p.getIngreso(), porcentaje(p.getIngreso(), total)))
+                .toList();
+
+        BigDecimal ingresoTop = productos.stream()
+                .map(ConcentracionIngresosDTO.Item::getIngreso)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal otros = total.subtract(ingresoTop).max(BigDecimal.ZERO);
+
+        return new ConcentracionIngresosDTO(
+                total, porcentaje(ingresoTop, total), productos, otros, porcentaje(otros, total));
+    }
+
+    private BigDecimal porcentaje(BigDecimal parte, BigDecimal total) {
+        if (total.signum() == 0) {
+            return BigDecimal.ZERO;
+        }
+        return parte.multiply(BigDecimal.valueOf(100)).divide(total, 1, RoundingMode.HALF_UP);
     }
 
     private LocalDate truncar(LocalDate fecha, String modo) {

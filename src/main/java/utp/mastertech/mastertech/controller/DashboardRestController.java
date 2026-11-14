@@ -7,11 +7,12 @@ import utp.mastertech.mastertech.dto.IngresoDiarioDTO;
 import utp.mastertech.mastertech.dto.ProductosVendidosDTO;
 import utp.mastertech.mastertech.dto.TendenciaPuntoDTO;
 import utp.mastertech.mastertech.service.DashboardService;
+import utp.mastertech.mastertech.dto.ConcentracionIngresosDTO;
+import utp.mastertech.mastertech.dto.IngresoPromedioDTO;
 
 import java.time.LocalDate;
 import java.util.List;
 
-/** Datos del dashboard de KPI (solo ADMIN, ver SecurityConfig). */
 @RestController
 @RequestMapping("/api/v1/dashboard")
 public class DashboardRestController {
@@ -19,7 +20,6 @@ public class DashboardRestController {
     @Autowired
     private DashboardService dashboardService;
 
-    // GET /api/v1/dashboard/tendencias?agrupar=dia&desde=2026-10-14&hasta=2026-11-13
     @GetMapping("/tendencias")
     public List<TendenciaPuntoDTO> tendencias(
             @RequestParam(defaultValue = "dia") String agrupar,
@@ -28,7 +28,6 @@ public class DashboardRestController {
         return dashboardService.tendenciaVentas(desde, hasta, agrupar);
     }
 
-    // GET /api/v1/dashboard/productos-vendidos?desde=2026-10-14&hasta=2026-11-13
     @GetMapping("/productos-vendidos")
     public ProductosVendidosDTO productosVendidos(
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
@@ -36,9 +35,22 @@ public class DashboardRestController {
         return dashboardService.productosVendidos(desde, hasta);
     }
 
-    // GET /api/v1/dashboard/ingreso-diario
     @GetMapping("/ingreso-diario")
     public IngresoDiarioDTO ingresoDiario() {
         return dashboardService.ingresoDiario();
+    }
+
+    @GetMapping("/ingreso-promedio")
+    public IngresoPromedioDTO ingresoPromedio(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
+        return dashboardService.ingresoPromedio(desde, hasta);
+    }
+
+    @GetMapping("/concentracion-ingresos")
+    public ConcentracionIngresosDTO concentracionIngresos(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate hasta) {
+        return dashboardService.concentracionIngresos(desde, hasta);
     }
 }
