@@ -1,9 +1,12 @@
 package utp.mastertech.mastertech.service;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 import utp.mastertech.mastertech.dto.ItemPedidoDTO;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.exception.StockInsuficienteException;
 import utp.mastertech.mastertech.model.DetalleVenta;
 import utp.mastertech.mastertech.model.Producto;
@@ -16,10 +19,12 @@ import utp.mastertech.mastertech.repository.VentaRepository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 public class VentaService {
@@ -33,10 +38,10 @@ public class VentaService {
     @Autowired
     private ProductoRepository productoRepository;
 
-    /** Une líneas repetidas del mismo producto sumando cantidades (conserva el orden). */
     public static final List<String> FLUJO_DESPACHO =
             List.of("Pagado", "Preparando", "Despachado", "Entregado");
 
+    /** Une líneas repetidas del mismo producto sumando cantidades (conserva el orden). */
     public List<ItemPedidoDTO> consolidar(List<ItemPedidoDTO> items) {
         Map<Long, Integer> porProducto = new LinkedHashMap<>();
         for (ItemPedidoDTO item : items) {
@@ -147,5 +152,37 @@ public class VentaService {
 
     public long contarVentas() {
         return ventaRepository.count();
+    }
+
+    public List<Venta> listarParaDespacho() {
+        return ventaRepository.findAll().stream()
+                .filter(v -> FLUJO_DESPACHO.contains(v.getEstado()))
+                .sorted(Comparator.comparing(Venta::getId).reversed())
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public Venta cambiarEstado(Long id, String nuevoEstado) {
+        Venta venta = ventaRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Venta no encontrada: " + id));
+
+        int actual = FLUJO_DESPACHO.indexOf(venta.getEstado());
+        int destino = FLUJO_DESPACHO.indexOf(nuevoEstado);
+
+        if (actual < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Este pedido no está en el flujo de despacho (estado actual: " + venta.getEstado() + ")");
+        }
+        if (destino != actual + 1) {
+            String siguiente = actual + 1 < FLUJO_DESPACHO.size()
+                    ? FLUJO_DESPACHO.get(actual + 1) : null;
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    siguiente == null
+                            ? "El pedido ya fue entregado"
+                            : "Desde " + venta.getEstado() + " solo se puede pasar a " + siguiente);
+        }
+
+        venta.setEstado(nuevoEstado);
+        return ventaRepository.save(venta);
     }
 }
