@@ -31,6 +31,8 @@ public class VentaMapper {
             dto.setUsuarioId(venta.getUsuario().getId());
             dto.setUsuarioNombre(venta.getUsuario().getNombre());
             dto.setUsuarioEmail(venta.getUsuario().getEmail());
+            dto.setUsuarioDireccion(venta.getUsuario().getDireccion());
+            dto.setUsuarioTelefono(venta.getUsuario().getNumeroTelefono());
         }
 
         // Mapear los detalles usando DetalleVentaMapper
