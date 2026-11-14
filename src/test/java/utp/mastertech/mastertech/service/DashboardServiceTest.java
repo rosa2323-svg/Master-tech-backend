@@ -35,23 +35,28 @@ class DashboardServiceTest {
 
     // ---------- helpers ----------
 
+    /**
+     * Implementaciones simples de las proyecciones (en vez de mocks): se usan dentro de
+     * when(...).thenReturn(...) y Mockito no permite crear stubbings anidados.
+     */
     private TendenciaVentaProjection tendencia(LocalDate periodo, long ordenes, long unidades, String ingreso) {
-        TendenciaVentaProjection p = mock(TendenciaVentaProjection.class);
-        when(p.getPeriodo()).thenReturn(periodo);
-        when(p.getOrdenes()).thenReturn(ordenes);
-        when(p.getUnidades()).thenReturn(unidades);
-        when(p.getIngreso()).thenReturn(new BigDecimal(ingreso));
-        return p;
+        BigDecimal monto = new BigDecimal(ingreso);
+        return new TendenciaVentaProjection() {
+            public LocalDate getPeriodo() { return periodo; }
+            public Long getOrdenes() { return ordenes; }
+            public Long getUnidades() { return unidades; }
+            public BigDecimal getIngreso() { return monto; }
+        };
     }
 
-    /** lenient: cada prueba usa solo algunos de los getters (p. ej. concentración no usa unidades). */
     private VentaAgrupadaProjection agrupada(long id, String nombre, long unidades, String ingreso) {
-        VentaAgrupadaProjection p = mock(VentaAgrupadaProjection.class);
-        lenient().when(p.getId()).thenReturn(id);
-        lenient().when(p.getNombre()).thenReturn(nombre);
-        lenient().when(p.getUnidades()).thenReturn(unidades);
-        lenient().when(p.getIngreso()).thenReturn(new BigDecimal(ingreso));
-        return p;
+        BigDecimal monto = new BigDecimal(ingreso);
+        return new VentaAgrupadaProjection() {
+            public Long getId() { return id; }
+            public String getNombre() { return nombre; }
+            public Long getUnidades() { return unidades; }
+            public BigDecimal getIngreso() { return monto; }
+        };
     }
 
     private static void assertDecimal(String esperado, BigDecimal real) {
