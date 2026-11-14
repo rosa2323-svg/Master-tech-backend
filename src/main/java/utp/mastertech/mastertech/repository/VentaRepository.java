@@ -8,6 +8,8 @@ import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import java.util.List;
 import java.util.Optional;
+import java.time.LocalDateTime;
+import java.math.BigDecimal;
 
 @Repository
 public interface VentaRepository extends JpaRepository<Venta, Long> {
@@ -24,6 +26,41 @@ public interface VentaRepository extends JpaRepository<Venta, Long> {
             "LOWER(u.nombre) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
             "LOWER(v.numeroOrden) LIKE LOWER(CONCAT('%', :keyword, '%'))")
     List<Venta> findByKeyword(@Param("keyword") String keyword);
+    @Query(value = """
+            SELECT CAST(date_trunc(CAST(:granularidad AS text), v.fecha) AS date) AS periodo,
+                   COUNT(*)                           AS ordenes,
+                   COALESCE(SUM(v.cantidad_items), 0) AS unidades,
+                   COALESCE(SUM(v.total), 0)          AS ingreso
+            FROM ventas v
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            GROUP BY 1
+            ORDER BY 1
+            """, nativeQuery = true)
+    List<TendenciaVentaProjection> tendenciaVentas(@Param("granularidad") String granularidad,
+                                                   @Param("desde") LocalDateTime desde,
+                                                   @Param("hasta") LocalDateTime hasta);
+
+    @Query(value = """
+            SELECT COALESCE(SUM(v.total), 0)
+            FROM ventas v
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            """, nativeQuery = true)
+    BigDecimal ingresoEntre(@Param("desde") LocalDateTime desde,
+                            @Param("hasta") LocalDateTime hasta);
+
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM ventas v
+            WHERE v.fecha >= :desde
+              AND v.fecha <  :hasta
+              AND v.estado <> 'ANULADA'
+            """, nativeQuery = true)
+    Long ordenesEntre(@Param("desde") LocalDateTime desde,
+                      @Param("hasta") LocalDateTime hasta);
 
 
 }
