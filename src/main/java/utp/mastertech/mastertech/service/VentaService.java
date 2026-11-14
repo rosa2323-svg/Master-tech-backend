@@ -34,6 +34,9 @@ public class VentaService {
     private ProductoRepository productoRepository;
 
     /** Une líneas repetidas del mismo producto sumando cantidades (conserva el orden). */
+    public static final List<String> FLUJO_DESPACHO =
+            List.of("Pagado", "Preparando", "Despachado", "Entregado");
+
     public List<ItemPedidoDTO> consolidar(List<ItemPedidoDTO> items) {
         Map<Long, Integer> porProducto = new LinkedHashMap<>();
         for (ItemPedidoDTO item : items) {

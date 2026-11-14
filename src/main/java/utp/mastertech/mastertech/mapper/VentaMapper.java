@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import utp.mastertech.mastertech.dto.VentaDTO;
 import utp.mastertech.mastertech.model.Venta;
+import utp.mastertech.mastertech.service.VentaService;
 
 import java.util.Collections;
 import java.util.stream.Collectors;
@@ -24,7 +25,7 @@ public class VentaMapper {
         dto.setTotal(venta.getTotal());
         dto.setCantidadItems(venta.getCantidadItems());
         dto.setNumeroOrden(venta.getNumeroOrden());
-        dto.setEstado(venta.getEstado());
+        dto.setEstado(estadoVisible(venta.getEstado()));
 
         if (venta.getUsuario() != null) {
             dto.setUsuarioId(venta.getUsuario().getId());
@@ -44,5 +45,8 @@ public class VentaMapper {
         }
 
         return dto;
+    }
+    private String estadoVisible(String estado) {
+        return VentaService.FLUJO_DESPACHO.contains(estado) ? estado : "Pagado";
     }
 }
