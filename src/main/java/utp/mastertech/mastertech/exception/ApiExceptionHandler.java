@@ -95,7 +95,22 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobal(Exception ex, HttpServletRequest request) {
+        if (esDesconexionDelCliente(ex)) {
+            log.debug("Cliente canceló la petición a {}", request.getRequestURI());
+            return null;
+        }
         log.error("Error inesperado en {}", request.getRequestURI(), ex);
         return responder(HttpStatus.INTERNAL_SERVER_ERROR, "Ocurrió un error inesperado en el servidor", request);
+    }
+
+    private boolean esDesconexionDelCliente(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof org.apache.catalina.connector.ClientAbortException
+                    || t instanceof org.springframework.web.context.request.async.AsyncRequestNotUsableException) {
+                return true;
+            }
+            if (t.getCause() == t) break;
+        }
+        return false;
     }
 }
