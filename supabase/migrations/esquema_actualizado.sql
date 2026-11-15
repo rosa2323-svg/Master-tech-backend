@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict TGc5CynyYTlO2AGzBNxlWiyPr6bC30CH5PD0p4ktGrqzjwhh5BQUwb9FTjhA1ue
+\restrict YkE2XLZYJPKQa1GZQHvcaKLDgsPLXbr0y22jAasjQn9AcPGVODehiBt0JWPDvHj
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.12 (Ubuntu 17.12-1.pgdg26.04+1)
@@ -4953,7 +4953,7 @@ CREATE TABLE public.ventas (
     usuario_id bigint,
     numero_orden text,
     estado character varying(20) DEFAULT 'COMPLETADA'::character varying NOT NULL,
-    CONSTRAINT chk_ventas_estado CHECK (((estado)::text = ANY ((ARRAY['PENDIENTE'::character varying, 'COMPLETADA'::character varying, 'ANULADA'::character varying])::text[])))
+    CONSTRAINT chk_ventas_estado CHECK (((estado)::text = ANY ((ARRAY['PENDIENTE'::character varying, 'COMPLETADA'::character varying, 'ANULADA'::character varying, 'Pagado'::character varying, 'Preparando'::character varying, 'Despachado'::character varying, 'Entregado'::character varying])::text[])))
 );
 
 
@@ -7280,5 +7280,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict TGc5CynyYTlO2AGzBNxlWiyPr6bC30CH5PD0p4ktGrqzjwhh5BQUwb9FTjhA1ue
+\unrestrict YkE2XLZYJPKQa1GZQHvcaKLDgsPLXbr0y22jAasjQn9AcPGVODehiBt0JWPDvHj
 
