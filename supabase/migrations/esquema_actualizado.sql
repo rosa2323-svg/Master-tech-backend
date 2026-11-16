@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict YkE2XLZYJPKQa1GZQHvcaKLDgsPLXbr0y22jAasjQn9AcPGVODehiBt0JWPDvHj
+\restrict eGip3gaf2gZPuJwIJrKLMhHPTwgX6WNbuozxTp6W3z2kX2pkX21AdFgSmJVrIHq
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.12 (Ubuntu 17.12-1.pgdg26.04+1)
@@ -1166,12 +1166,15 @@ begin
             set_config('request.jwt.claim.role', role_name, true),
             set_config('request.headers', headers, true);
 
-    -- One lookup for every probe, by the full primary key.
-    visible_ids := array(
-      select m.id
-      from realtime.messages m
-      where m.inserted_at = probe_inserted_at
-        and m.id = any(probe_ids));
+    -- One lookup for every probe, by the full primary key. Skipped without probes, so the
+    -- SELECT policies are not planned for a write.
+    if cardinality(probe_ids) > 0 then
+      visible_ids := array(
+        select m.id
+        from realtime.messages m
+        where m.inserted_at = probe_inserted_at
+          and m.id = any(probe_ids));
+    end if;
 
     read_allowed := array(
       select p.id = any(visible_ids)
@@ -7280,5 +7283,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict YkE2XLZYJPKQa1GZQHvcaKLDgsPLXbr0y22jAasjQn9AcPGVODehiBt0JWPDvHj
+\unrestrict eGip3gaf2gZPuJwIJrKLMhHPTwgX6WNbuozxTp6W3z2kX2pkX21AdFgSmJVrIHq
 
