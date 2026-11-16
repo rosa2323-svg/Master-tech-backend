@@ -1,29 +1,37 @@
 # Master Tech — Backend (Spring Boot)
 
-API REST para la tienda Master Tech (antes "Phantom"). Java 17 · Spring Boot · PostgreSQL (Supabase) · JWT · Stripe.
+API REST de la tienda Master Tech: catálogo, usuarios con roles, pago con Stripe, despacho de pedidos y dashboard de ventas.
 
-## Variables de entorno
-Copia `.env.example` y configura cada variable en IntelliJ (Run → Edit Configurations → Environment variables) o en Render.
-`JWT_SECRET` es obligatoria (mínimo 32 caracteres).
+**Stack:** Java 17 · Spring Boot 4 · Gradle · Spring Security + JWT · PostgreSQL (Supabase) · Stripe
 
-## Ejecutar
+| Servicio | Local | Render |
+|---|---|---|
+| [Frontend](https://github.com/rosa2323-svg/Master-tech-frontend.git)| http://localhost:5173 | https://herramientas01.onrender.com |
+| [Backend Spring Boot (este repo)](https://github.com/rosa2323-svg/Master-tech-backend) | http://localhost:8089 | https://master-tech-backend.onrender.com |
+| [Asistente IA](https://github.com/MaelXDD/Bot_Asitente.git)| http://localhost:8090/mastertech | https://bot-asitente.onrender.com/mastertech |
+
+## Puesta en marcha
+Requiere Java 17 y una base PostgreSQL con el esquema ya creado (Hibernate solo lo valida, no lo crea).
+
 ```bash
+cp .env.example .env     # define las variables en IntelliJ (Run → Edit Configurations) o en Render
 ./gradlew bootRun        # http://localhost:8089
+./gradlew test           # pruebas unitarias
 ```
 
-## Endpoints
-| Método | Ruta | Acceso |
-|---|---|---|
-| POST | `/api/auth/login` · `/api/auth/registro` | público |
-| GET | `/api/auth/me` | sesión |
-| GET | `/api/v1/productos` · `/{id}` · `/keywords` | público |
-| POST/PUT/DELETE | `/api/v1/productos` · `/{id}` | ADMIN |
-| POST | `/api/v1/productos/{id}/imagen` (multipart `imagen`) | ADMIN |
-| GET | `/api/v1/categorias` · `/{id}` | público |
-| POST/PUT/DELETE | `/api/v1/categorias` | ADMIN |
-| GET | `/api/v1/ventas` · `/{id}` | ADMIN |
-| GET/POST/PUT/PATCH/DELETE | `/api/v1/usuarios` | ADMIN |
-| GET/PUT | `/api/v1/me` · PUT `/api/v1/me/password` · GET `/api/v1/me/pedidos` | sesión |
-| POST | `/api/v1/pedidos/checkout` · `/api/v1/pedidos/confirmar` | sesión |
+## Variables de entorno
+| Variable | Descripción |
+|---|---|
+| `JWT_SECRET` | Secreto del JWT (mínimo 32 caracteres, obligatoria). El bot debe usar el mismo |
+| `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` | Conexión a PostgreSQL |
+| `STRIPE_SECRET_KEY` | Clave secreta de Stripe (modo de prueba) |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Supabase Storage para las imágenes (la `service_role` solo va en el servidor) |
+| `FRONTEND_URL` | URL del front para CORS y Stripe (por defecto `http://localhost:5173`) |
 
-Roles: `USER` (cliente) y `ADMIN`. CORS permitido para `FRONTEND_URL` (por defecto `http://localhost:5173`).
+Opcionales: `SUPABASE_BUCKET_PRODUCTOS` (por defecto `Productos`), `CORS_ALLOWED_ORIGINS` y `PORT` (por defecto `8089`). **Nunca subas secretos al repositorio.**
+
+## Roles
+`USER` (cliente, por defecto) · `DESPACHADOR` (ver pedidos y cambiar su estado) · `ADMIN` (todo, incluida la administración). El catálogo es público en solo lectura.
+
+## Contribuir
+Issue en el tablero → rama desde `develop` (`feature/<nombre>-pr<N>-<tema>`) → commits `feat:`/`fix:`/`docs:` → PR hacia `develop` con la plantilla y `Closes #N`. Las pruebas deben pasar en GitHub Actions.
