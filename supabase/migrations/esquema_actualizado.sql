@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict eGip3gaf2gZPuJwIJrKLMhHPTwgX6WNbuozxTp6W3z2kX2pkX21AdFgSmJVrIHq
+\restrict RnhX1Y5uNFcl1ssMcC1UmczxfUWTLbDeDl3ykKIqFLJyI5ibMNx9qe1zpbJ2Gkc
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.12 (Ubuntu 17.12-1.pgdg26.04+1)
@@ -4306,6 +4306,7 @@ CREATE TABLE auth.one_time_tokens (
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone,
+    link_token_hash text,
     CONSTRAINT one_time_tokens_token_hash_check CHECK ((char_length(token_hash) > 0))
 );
 
@@ -4367,6 +4368,7 @@ CREATE TABLE auth.saml_providers (
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     name_id_format text,
+    dedicated_scope boolean,
     CONSTRAINT "entity_id not empty" CHECK ((char_length(entity_id) > 0)),
     CONSTRAINT "metadata_url not empty" CHECK (((metadata_url = NULL::text) OR (char_length(metadata_url) > 0))),
     CONSTRAINT "metadata_xml not empty" CHECK ((char_length(metadata_xml) > 0))
@@ -6058,6 +6060,13 @@ CREATE INDEX oauth_consents_user_order_idx ON auth.oauth_consents USING btree (u
 
 
 --
+-- Name: one_time_tokens_link_token_hash_hash_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX one_time_tokens_link_token_hash_hash_idx ON auth.one_time_tokens USING hash (link_token_hash);
+
+
+--
 -- Name: one_time_tokens_relates_to_hash_idx; Type: INDEX; Schema: auth; Owner: -
 --
 
@@ -7283,5 +7292,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict eGip3gaf2gZPuJwIJrKLMhHPTwgX6WNbuozxTp6W3z2kX2pkX21AdFgSmJVrIHq
+\unrestrict RnhX1Y5uNFcl1ssMcC1UmczxfUWTLbDeDl3ykKIqFLJyI5ibMNx9qe1zpbJ2Gkc
 
