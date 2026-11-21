@@ -38,6 +38,7 @@ import java.util.Map;
 public class PedidoService {
 
     private static final int MAX_METADATA = 500; // límite de Stripe por valor de metadata
+    private static final long MINUTOS_EXPIRACION_PAGO = 30;
 
     @Autowired
     private VentaService ventaService;
@@ -93,8 +94,15 @@ public class PedidoService {
 
         String base = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
         try {
+            long expiraEn = (System.currentTimeMillis() / 1000L) + (MINUTOS_EXPIRACION_PAGO * 60);
             SessionCreateParams params = SessionCreateParams.builder()
                     .setMode(SessionCreateParams.Mode.PAYMENT)
+                    .setExpiresAt(expiraEn)
+                    .setCustomText(SessionCreateParams.CustomText.builder()
+                            .setSubmit(SessionCreateParams.CustomText.Submit.builder()
+                                    .setMessage("Tienes " + MINUTOS_EXPIRACION_PAGO + " minutos para completar tu pago.")
+                                    .build())
+                            .build())
                     .setSuccessUrl(base + "/pago/confirmar?session_id={CHECKOUT_SESSION_ID}")
                     .setCancelUrl(base + "/carrito")
                     .putMetadata("email", email)
@@ -116,10 +124,13 @@ public class PedidoService {
             throw new PagoException("No se pudo verificar el pago con Stripe.", e);
         }
 
+        if ("expired".equals(session.getStatus())) {
+            throw new ConflictException("El tiempo para pagar venció. Vuelve al carrito e inténtalo de nuevo.");
+        }
+
         if (!"paid".equals(session.getPaymentStatus())) {
             throw new ConflictException("El pago todavía no figura como completado.");
         }
-
         Map<String, String> metadata = session.getMetadata();
         if (metadata == null || !email.equalsIgnoreCase(metadata.get("email"))) {
             throw new ConflictException("Esta sesión de pago pertenece a otra cuenta.");
