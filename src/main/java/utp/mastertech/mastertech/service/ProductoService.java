@@ -3,6 +3,7 @@ package utp.mastertech.mastertech.service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.model.Categoria;
 import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.repository.CategoriaRepository;
@@ -22,8 +23,14 @@ public class ProductoService {
     @Autowired
     private SupabaseStorageService storageService;
 
+    /** Todos los productos, también los inhabilitados (uso del administrador). */
     public List<Producto> listarProductos() {
         return productoRepository.findAll();
+    }
+
+    /** Solo los productos habilitados (catálogo público). */
+    public List<Producto> listarProductosActivos() {
+        return productoRepository.findByActivoTrue();
     }
 
     public List<Producto> buscarProductos(String keyword) {
@@ -84,15 +91,14 @@ public class ProductoService {
     }
 
     /**
-     * Elimina el producto y, una vez borrada la fila, su imagen del bucket.
-     * Si el borrado falla (p. ej. el producto tiene ventas asociadas) la imagen no se toca.
+     * Habilita o inhabilita un producto (baja lógica). No se borra la fila ni su imagen: así se conservan
+     * las ventas históricas y el producto puede volver a habilitarse.
      */
-    public void eliminarProducto(Long id) {
-        String url = productoRepository.findById(id)
-                .map(Producto::getImagenUrl)
-                .orElse(null);
-        productoRepository.deleteById(id);
-        storageService.eliminarPorUrl(url);
+    public Producto cambiarActivo(Long id, boolean activo) {
+        Producto producto = productoRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Producto no encontrado: " + id));
+        producto.setActivo(activo);
+        return productoRepository.save(producto);
     }
 
     public List<Categoria> listarCategorias() {
