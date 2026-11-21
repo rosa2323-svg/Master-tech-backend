@@ -67,6 +67,10 @@ public class VentaService {
                 continue;
             }
             Producto p = opt.get();
+            if (Boolean.FALSE.equals(p.getActivo())) {
+                errores.add("\"" + p.getNombre() + "\" ya no está disponible.");
+                continue;
+            }
             int stockActual = p.getStock() != null ? p.getStock() : 0;
             if (item.getCantidad() > stockActual) {
                 errores.add("Solo hay " + stockActual + " unidades disponibles de \"" + p.getNombre() + "\".");

@@ -62,6 +62,7 @@ public class ProductoService {
         throw new IllegalStateException("No se pudo generar una abreviatura única para la categoría");
     }
 
+    /** Todos los productos, también los inhabilitados (uso del administrador). */
     public List<Producto> listarProductos() {
         return productoRepository.findAll();
     }
