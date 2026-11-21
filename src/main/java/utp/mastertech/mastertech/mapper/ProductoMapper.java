@@ -20,6 +20,7 @@ public class ProductoMapper {
         dto.setMarca(producto.getMarca());
         dto.setImagenUrl(producto.getImagenUrl());
         dto.setStock(producto.getStock());
+        dto.setActivo(producto.getActivo());
 
         // Extraer solo id y nombre de la categoría
         if (producto.getCategoria() != null) {
@@ -42,7 +43,7 @@ public class ProductoMapper {
         producto.setMarca(dto.getMarca());
         producto.setImagenUrl(dto.getImagenUrl());
         producto.setStock(dto.getStock());
-
+        producto.setActivo(dto.getActivo() == null || dto.getActivo());
 
         if (dto.getCategoriaId() != null) {
             Categoria categoria = new Categoria();
@@ -61,6 +62,7 @@ public class ProductoMapper {
         if (dto.getMarca() != null)       producto.setMarca(dto.getMarca());
         if (dto.getImagenUrl() != null)   producto.setImagenUrl(dto.getImagenUrl());
         if (dto.getStock() != null)       producto.setStock(dto.getStock());
+        if (dto.getActivo() != null)      producto.setActivo(dto.getActivo());
 
         if (dto.getCategoriaId() != null) {
             Categoria categoria = new Categoria();
