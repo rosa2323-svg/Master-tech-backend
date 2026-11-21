@@ -13,6 +13,7 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import utp.mastertech.mastertech.exception.ApiExceptionHandler;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.exception.StorageException;
 import utp.mastertech.mastertech.mapper.ProductoMapper;
 import utp.mastertech.mastertech.model.Categoria;
@@ -65,6 +66,7 @@ class ProductoRestControllerTest {
         p.setPrecio(100.0);
         p.setStock(5);
         p.setCategoria(categoria);
+        p.setCodigo(String.format("PRD-%04d", id));
         return p;
     }
 
@@ -75,7 +77,7 @@ class ProductoRestControllerTest {
 
     @Test
     void listarDevuelveLosProductosComoDto() throws Exception {
-        when(productoService.listarProductos()).thenReturn(List.of(
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
                 producto(1L, "Laptop X", categoria(1L, "Laptops")),
                 producto(2L, "Mouse Y", categoria(2L, "Accesorios"))));
 
@@ -104,6 +106,86 @@ class ProductoRestControllerTest {
 
         mvc.perform(get("/api/v1/productos/99"))
                 .andExpect(status().isNotFound());
+    }
+
+
+    private static org.springframework.security.core.Authentication autenticado(String rol) {
+        return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "x@mail.com", null,
+                List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(rol)));
+    }
+
+    @Test
+    void elListadoIncluyeElCodigoDelProducto() throws Exception {
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
+                producto(7L, "Laptop X", categoria(1L, "Laptops"))));
+
+        mvc.perform(get("/api/v1/productos"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].codigo").value("PRD-0007"));
+    }
+
+    @Test
+    void listarPublicoNuncaIncluyeInhabilitadosAunqueSePidanTodos() throws Exception {
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
+                producto(1L, "Laptop X", categoria(1L, "Laptops"))));
+
+        mvc.perform(get("/api/v1/productos").param("todos", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+
+        verify(productoService, never()).listarProductos();
+    }
+
+    @Test
+    void listarConTodosYRolUserSigueDevolviendoSoloActivos() throws Exception {
+        when(productoService.listarProductosActivos()).thenReturn(List.of());
+
+        mvc.perform(get("/api/v1/productos").param("todos", "true").principal(autenticado("ROLE_USER")))
+                .andExpect(status().isOk());
+
+        verify(productoService, never()).listarProductos();
+    }
+
+    @Test
+    void adminConTodosVeTambienLosInhabilitados() throws Exception {
+        Producto off = producto(2L, "Mouse viejo", categoria(2L, "Accesorios"));
+        off.setActivo(false);
+        when(productoService.listarProductos()).thenReturn(List.of(
+                producto(1L, "Laptop X", categoria(1L, "Laptops")), off));
+
+        mvc.perform(get("/api/v1/productos").param("todos", "true").principal(autenticado("ROLE_ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].activo").value(true))
+                .andExpect(jsonPath("$[1].activo").value(false));
+
+        verify(productoService, never()).listarProductosActivos();
+    }
+
+    @Test
+    void productoInhabilitadoDaNotFoundAlPublicoYSeVeComoAdmin() throws Exception {
+        Producto off = producto(2L, "Mouse viejo", categoria(2L, "Accesorios"));
+        off.setActivo(false);
+        when(productoService.obtenerProducto(2L)).thenReturn(Optional.of(off));
+
+        mvc.perform(get("/api/v1/productos/2")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/productos/2").principal(autenticado("ROLE_USER"))).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v1/productos/2").principal(autenticado("ROLE_ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.activo").value(false));
+    }
+
+    @Test
+    void crearSinActivoQuedaHabilitado() throws Exception {
+        mvc.perform(post("/api/v1/productos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON_VALIDO))
+                .andExpect(status().isCreated());
+
+        ArgumentCaptor<Producto> captor = ArgumentCaptor.forClass(Producto.class);
+        verify(productoService).guardarProducto(captor.capture());
+        assertEquals(Boolean.TRUE, captor.getValue().getActivo());
     }
 
     // ---------- crear ----------
@@ -259,34 +341,68 @@ class ProductoRestControllerTest {
                 .andExpect(status().isBadGateway());
     }
 
-    // ---------- eliminar ----------
+    // ---------- habilitar / inhabilitar ----------
 
     @Test
-    void eliminarExistenteDevuelve204() throws Exception {
-        when(productoService.obtenerProducto(1L))
-                .thenReturn(Optional.of(producto(1L, "Laptop X", categoria(1L, "Laptops"))));
+    void inhabilitarDevuelve200ConElProductoInactivo() throws Exception {
+        Producto off = producto(1L, "Laptop X", categoria(1L, "Laptops"));
+        off.setActivo(false);
+        when(productoService.cambiarActivo(1L, false)).thenReturn(off);
 
-        mvc.perform(delete("/api/v1/productos/1"))
-                .andExpect(status().isNoContent());
+        mvc.perform(patch("/api/v1/productos/1/activo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"activo\":false}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(1))
+                .andExpect(jsonPath("$.activo").value(false));
 
-        verify(productoService).eliminarProducto(1L);
+        verify(productoService).cambiarActivo(1L, false);
     }
 
     @Test
-    void eliminarInexistenteDevuelve404SinEliminar() throws Exception {
-        when(productoService.obtenerProducto(99L)).thenReturn(Optional.empty());
+    void habilitarDevuelve200ConElProductoActivo() throws Exception {
+        when(productoService.cambiarActivo(1L, true))
+                .thenReturn(producto(1L, "Laptop X", categoria(1L, "Laptops")));
 
-        mvc.perform(delete("/api/v1/productos/99"))
+        mvc.perform(patch("/api/v1/productos/1/activo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"activo\":true}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.activo").value(true));
+    }
+
+    @Test
+    void inhabilitarInexistenteDevuelve404() throws Exception {
+        when(productoService.cambiarActivo(99L, false))
+                .thenThrow(new ResourceNotFoundException("Producto no encontrado: 99"));
+
+        mvc.perform(patch("/api/v1/productos/99/activo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"activo\":false}"))
                 .andExpect(status().isNotFound());
+    }
 
-        verify(productoService, never()).eliminarProducto(99L);
+    @Test
+    void cambiarActivoSinElCampoDevuelve400() throws Exception {
+        mvc.perform(patch("/api/v1/productos/1/activo")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(productoService);
+    }
+
+    @Test
+    void yaNoExisteElBorradoDeProductos() throws Exception {
+        mvc.perform(delete("/api/v1/productos/1"))
+                .andExpect(status().isMethodNotAllowed());
     }
 
     // ---------- keywords (autocompletado) ----------
 
     @Test
     void keywordsBuscaEnNombreDeProductoYEnCategoriaSinDistinguirMayusculas() throws Exception {
-        when(productoService.listarProductos()).thenReturn(List.of(
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
                 producto(1L, "Laptop Dell", categoria(1L, "Computo")),
                 producto(2L, "Mouse Gamer", categoria(2L, "Laptop accesorios")),
                 producto(3L, "Teclado", categoria(3L, "Perifericos"))));
@@ -304,7 +420,7 @@ class ProductoRestControllerTest {
     @Test
     void keywordsLimitaA4ProductosYA2CategoriasSinRepetidos() throws Exception {
         Categoria c = categoria(1L, "Laptops");
-        when(productoService.listarProductos()).thenReturn(List.of(
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
                 producto(1L, "Laptop A", c),
                 producto(2L, "Laptop A", c),   // repetido: se descarta
                 producto(3L, "Laptop B", c),
@@ -327,7 +443,7 @@ class ProductoRestControllerTest {
     void keywordsToleraProductosSinNombreOSinCategoria() throws Exception {
         Producto sinNombre = producto(1L, null, categoria(1L, "Perifericos"));
         Producto sinCategoria = producto(2L, "Audifonos", null);
-        when(productoService.listarProductos()).thenReturn(List.of(sinNombre, sinCategoria));
+        when(productoService.listarProductosActivos()).thenReturn(List.of(sinNombre, sinCategoria));
         when(productoService.listarCategorias()).thenReturn(List.of());
 
         mvc.perform(get("/api/v1/productos/keywords").param("term", "audi"))
@@ -338,7 +454,7 @@ class ProductoRestControllerTest {
 
     @Test
     void keywordsSinCoincidenciasDevuelveListaVacia() throws Exception {
-        when(productoService.listarProductos()).thenReturn(List.of(
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
                 producto(1L, "Laptop Dell", categoria(1L, "Computo"))));
         when(productoService.listarCategorias()).thenReturn(List.of(categoria(1L, "Computo")));
 

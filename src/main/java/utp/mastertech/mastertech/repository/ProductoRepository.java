@@ -13,12 +13,17 @@ public interface ProductoRepository extends JpaRepository<Producto, Long> {
 
     List<Producto> findByCategoriaId(Long categoriaId);
 
+    List<Producto> findByActivoTrue();
+
     List<Producto> findByNombreContainingIgnoreCaseOrDescripcionContainingIgnoreCase(String nombre, String descripcion);
 
-    @Query("SELECT p FROM Producto p WHERE LOWER(p.nombre) LIKE LOWER(CONCAT('%', :keyword, '%'))")
+    @Query("SELECT p FROM Producto p WHERE p.activo = true AND LOWER(p.nombre) LIKE LOWER(CONCAT('%', :keyword, '%'))")
     List<Producto> buscarPorNombre(@Param("keyword") String keyword);
 
     List<Producto> findByStockLessThanEqual(Integer limite);
+
+    @Query(value = "SELECT nextval('public.productos_codigo_seq')", nativeQuery = true)
+    long siguienteNumeroCodigo();
 
     /** Bloquea la fila mientras se descuenta stock (evita vender de más con compras simultáneas). */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
