@@ -104,4 +104,18 @@ class ProductoMapperTest {
         mapper.updateEntityFromDTO(dto, p);
         assertEquals(Boolean.TRUE, p.getActivo());
     }
+
+    @Test
+    void codigoViajaAlDtoPeroNuncaSeCopiaDesdeElCliente() {
+        Producto p = new Producto();
+        p.setCodigo("PRD-0042");
+        assertEquals("PRD-0042", mapper.toDTO(p).getCodigo());
+
+        ProductoDTO dto = new ProductoDTO();
+        dto.setCodigo("HACK-1");
+        assertNull(mapper.toEntity(dto).getCodigo());
+
+        mapper.updateEntityFromDTO(dto, p);
+        assertEquals("PRD-0042", p.getCodigo());
+    }
 }

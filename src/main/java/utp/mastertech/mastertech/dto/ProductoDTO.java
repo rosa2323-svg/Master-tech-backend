@@ -29,5 +29,8 @@ public class ProductoDTO {
     private Long categoriaId;
 
     private String categoriaNombre;
+
+    private String codigo;
+
     private Boolean activo;
 }

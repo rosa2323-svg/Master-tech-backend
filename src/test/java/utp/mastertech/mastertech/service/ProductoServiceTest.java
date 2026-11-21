@@ -131,6 +131,148 @@ class ProductoServiceTest {
         verify(storageService, never()).eliminarPorUrl(any());
     }
 
+    // ---------- código (abreviatura de categoría + número) ----------
+
+    @Test
+    void productoNuevoRecibeCodigoPRDConCuatroDigitos() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(7L);
+        Producto p = new Producto();
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-0007", p.getCodigo());
+        verify(productoRepository).save(p);
+    }
+
+    @Test
+    void productoNuevoConImagenTambienRecibeCodigo() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(12L);
+        when(storageService.subirImagenProducto(imagen)).thenReturn("http://bucket/n.png");
+        Producto p = new Producto();
+
+        service.guardarProducto(p, imagen);
+
+        assertEquals("PRD-0012", p.getCodigo());
+    }
+
+    @Test
+    void productoExistenteConservaSuCodigoYNoConsumeLaSecuencia() {
+        Producto p = new Producto();
+        p.setCodigo("PRD-0003");
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-0003", p.getCodigo());
+        verify(productoRepository, never()).siguienteNumeroCodigo();
+    }
+
+    @Test
+    void elCodigoSuperaLosCuatroDigitosSinTruncarse() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(10000L);
+        Producto p = new Producto();
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-10000", p.getCodigo());
+    }
+
+    private Producto productoDeCategoria(long categoriaId) {
+        Categoria stub = new Categoria();
+        stub.setId(categoriaId);
+        Producto p = new Producto();
+        p.setCategoria(stub);
+        return p;
+    }
+
+    @Test
+    void productoNuevoUsaLaAbreviaturaDeSuCategoria() {
+        Categoria laptops = new Categoria();
+        laptops.setId(13L);
+        laptops.setCodigo("LAP");
+        when(categoriaRepository.findById(13L)).thenReturn(Optional.of(laptops));
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(7L);
+        Producto p = productoDeCategoria(13L);
+
+        service.guardarProducto(p);
+
+        assertEquals("LAP-0007", p.getCodigo());
+    }
+
+    @Test
+    void productoConCategoriaInexistenteFalla() {
+        when(categoriaRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> service.guardarProducto(productoDeCategoria(99L)));
+        verify(productoRepository, never()).save(any());
+    }
+
+    @Test
+    void moverProductoDeCategoriaNoCambiaSuCodigo() {
+        Producto p = productoDeCategoria(14L);
+        p.setCodigo("LAP-0003");
+
+        service.guardarProducto(p);
+
+        assertEquals("LAP-0003", p.getCodigo());
+        verify(categoriaRepository, never()).findById(any());
+    }
+
+    @Test
+    void categoriaNuevaRecibeTresLetrasSinTildes() {
+        Categoria c = new Categoria();
+        c.setNombre("Periféricos");
+
+        service.guardarCategoria(c);
+
+        assertEquals("PER", c.getCodigo());
+        verify(categoriaRepository).save(c);
+    }
+
+    @Test
+    void categoriaConAbreviaturaOcupadaUsaCuatroLetras() {
+        when(categoriaRepository.existsByCodigo("CON")).thenReturn(true);
+        Categoria c = new Categoria();
+        c.setNombre("Consolas retro");
+
+        service.guardarCategoria(c);
+
+        assertEquals("CONS", c.getCodigo());
+    }
+
+    @Test
+    void categoriaConTresYCuatroLetrasOcupadasUsaDosLetrasMasNumero() {
+        when(categoriaRepository.existsByCodigo("LAP")).thenReturn(true);
+        when(categoriaRepository.existsByCodigo("LAPT")).thenReturn(true);
+        Categoria c = new Categoria();
+        c.setNombre("Laptops");
+
+        service.guardarCategoria(c);
+
+        assertEquals("LA2", c.getCodigo());
+    }
+
+    @Test
+    void categoriaConNombreSinLetrasUsaCAT() {
+        Categoria c = new Categoria();
+        c.setNombre("123");
+
+        service.guardarCategoria(c);
+
+        assertEquals("CAT", c.getCodigo());
+    }
+
+    @Test
+    void categoriaExistenteConservaSuCodigo() {
+        Categoria c = new Categoria();
+        c.setNombre("Laptops");
+        c.setCodigo("LAP");
+
+        service.guardarCategoria(c);
+
+        assertEquals("LAP", c.getCodigo());
+        verify(categoriaRepository, never()).existsByCodigo(any());
+    }
+
     // ---------- habilitar / inhabilitar ----------
 
     @Test

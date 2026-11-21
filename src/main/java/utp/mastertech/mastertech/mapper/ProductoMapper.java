@@ -21,6 +21,7 @@ public class ProductoMapper {
         dto.setImagenUrl(producto.getImagenUrl());
         dto.setStock(producto.getStock());
         dto.setActivo(producto.getActivo());
+        dto.setCodigo(producto.getCodigo());   // solo lectura: lo asigna el servidor
 
         // Extraer solo id y nombre de la categoría
         if (producto.getCategoria() != null) {

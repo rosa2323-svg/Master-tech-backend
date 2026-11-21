@@ -66,6 +66,7 @@ class ProductoRestControllerTest {
         p.setPrecio(100.0);
         p.setStock(5);
         p.setCategoria(categoria);
+        p.setCodigo(String.format("PRD-%04d", id));
         return p;
     }
 
@@ -112,6 +113,16 @@ class ProductoRestControllerTest {
         return new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                 "x@mail.com", null,
                 List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(rol)));
+    }
+
+    @Test
+    void elListadoIncluyeElCodigoDelProducto() throws Exception {
+        when(productoService.listarProductosActivos()).thenReturn(List.of(
+                producto(7L, "Laptop X", categoria(1L, "Laptops"))));
+
+        mvc.perform(get("/api/v1/productos"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].codigo").value("PRD-0007"));
     }
 
     @Test

@@ -53,6 +53,9 @@ public class Producto {
     @Column(nullable = false)
     private Integer stock;
 
+    @Column(nullable = false, unique = true, length = 20, updatable = false)
+    private String codigo;
+
     @Column(nullable = false)
     private Boolean activo = true;
 

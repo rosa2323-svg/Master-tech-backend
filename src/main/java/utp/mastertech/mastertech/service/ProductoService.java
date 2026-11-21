@@ -8,7 +8,10 @@ import utp.mastertech.mastertech.model.Categoria;
 import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.repository.CategoriaRepository;
 import utp.mastertech.mastertech.repository.ProductoRepository;
+import java.text.Normalizer;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 @Service
@@ -22,6 +25,42 @@ public class ProductoService {
 
     @Autowired
     private SupabaseStorageService storageService;
+    private void asegurarCodigo(Producto producto) {
+        if (producto.getCodigo() != null && !producto.getCodigo().isBlank()) return;
+        String prefijo = "PRD";
+        if (producto.getCategoria() != null && producto.getCategoria().getId() != null) {
+            Categoria cat = categoriaRepository.findById(producto.getCategoria().getId())
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Categoría no encontrada: " + producto.getCategoria().getId()));
+            if (cat.getCodigo() != null && !cat.getCodigo().isBlank()) prefijo = cat.getCodigo();
+        }
+        producto.setCodigo(String.format(Locale.ROOT, "%s-%04d", prefijo, productoRepository.siguienteNumeroCodigo()));
+    }
+
+    static String soloLetras(String nombre) {
+        if (nombre == null) return "";
+        String sinTildes = Normalizer.normalize(nombre, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+        return sinTildes.replaceAll("[^A-Za-z]", "").toUpperCase(Locale.ROOT);
+    }
+
+    private void asegurarCodigo(Categoria categoria) {
+        if (categoria.getCodigo() != null && !categoria.getCodigo().isBlank()) return;
+        String letras = soloLetras(categoria.getNombre());
+        if (letras.length() < 2) letras = "CAT";
+        String base3 = letras.substring(0, Math.min(3, letras.length()));
+        List<String> candidatos = new ArrayList<>();
+        candidatos.add(base3);
+        if (letras.length() >= 4) candidatos.add(letras.substring(0, 4));
+        String base2 = letras.substring(0, 2);
+        for (int n = 2; n <= 99; n++) candidatos.add(base2 + n);
+        for (String c : candidatos) {
+            if (!categoriaRepository.existsByCodigo(c)) {
+                categoria.setCodigo(c);
+                return;
+            }
+        }
+        throw new IllegalStateException("No se pudo generar una abreviatura única para la categoría");
+    }
 
     /** Todos los productos, también los inhabilitados (uso del administrador). */
     public List<Producto> listarProductos() {
@@ -44,6 +83,7 @@ public class ProductoService {
 
     /** Guardado sin imagen (lo usa la API REST: conserva la imagenUrl que traiga el producto). */
     public void guardarProducto(Producto producto) {
+        asegurarCodigo(producto);
         productoRepository.save(producto);
     }
 
@@ -76,6 +116,7 @@ public class ProductoService {
             producto.setImagenUrl(urlNueva);
         }
 
+        asegurarCodigo(producto);
         try {
             productoRepository.save(producto);
         } catch (RuntimeException e) {
@@ -110,6 +151,7 @@ public class ProductoService {
     }
 
     public void guardarCategoria(Categoria categoria) {
+        asegurarCodigo(categoria);
         categoriaRepository.save(categoria);
     }
 
