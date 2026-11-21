@@ -7,6 +7,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.model.Categoria;
 import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.repository.CategoriaRepository;
@@ -130,32 +131,49 @@ class ProductoServiceTest {
         verify(storageService, never()).eliminarPorUrl(any());
     }
 
-    // ---------- eliminar ----------
+    // ---------- habilitar / inhabilitar ----------
 
     @Test
-    void eliminarProductoBorraLaFilaYLuegoLaImagen() {
+    void cambiarActivoInhabilitaElProductoSinBorrarFilaNiImagen() {
         Producto p = new Producto();
         p.setId(8L);
         p.setImagenUrl("http://bucket/p8.png");
         when(productoRepository.findById(8L)).thenReturn(Optional.of(p));
+        when(productoRepository.save(p)).thenReturn(p);
 
-        service.eliminarProducto(8L);
+        Producto r = service.cambiarActivo(8L, false);
 
-        InOrder orden = inOrder(productoRepository, storageService);
-        orden.verify(productoRepository).deleteById(8L);
-        orden.verify(storageService).eliminarPorUrl("http://bucket/p8.png");
+        assertFalse(r.getActivo());
+        verify(productoRepository).save(p);
+        verify(productoRepository, never()).deleteById(any());
+        verifyNoInteractions(storageService);
     }
 
     @Test
-    void siNoSePuedeBorrarElProductoLaImagenNoSeToca() {
+    void cambiarActivoVuelveAHabilitarUnProducto() {
         Producto p = new Producto();
-        p.setImagenUrl("http://bucket/p8.png");
+        p.setId(8L);
+        p.setActivo(false);
         when(productoRepository.findById(8L)).thenReturn(Optional.of(p));
-        doThrow(new RuntimeException("tiene ventas")).when(productoRepository).deleteById(8L);
+        when(productoRepository.save(p)).thenReturn(p);
 
-        assertThrows(RuntimeException.class, () -> service.eliminarProducto(8L));
+        assertTrue(service.cambiarActivo(8L, true).getActivo());
+    }
 
-        verifyNoInteractions(storageService);
+    @Test
+    void cambiarActivoDeProductoInexistenteLanzaNoEncontrado() {
+        when(productoRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> service.cambiarActivo(99L, false));
+        verify(productoRepository, never()).save(any());
+    }
+
+    @Test
+    void listarProductosActivosUsaSoloLosHabilitados() {
+        when(productoRepository.findByActivoTrue()).thenReturn(List.of(new Producto()));
+
+        assertEquals(1, service.listarProductosActivos().size());
+        verify(productoRepository, never()).findAll();
     }
 
     // ---------- categorías ----------
