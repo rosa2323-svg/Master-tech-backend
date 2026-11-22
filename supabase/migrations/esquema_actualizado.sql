@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict vzg4qdoTnpJDwDkXJ76nrZOQFIBO34BJvc25363VQGRJneFxlBaqyLEFga47mdr
+\restrict HeshthlPYBg4btGgPhIy3vKJB2f5BoUPpofOs2EBaygUNGeQTrRMpQENjqwX9JD
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.12 (Ubuntu 17.12-1.pgdg26.04+1)
@@ -4814,7 +4814,8 @@ CREATE TABLE public.categorias (
     id bigint NOT NULL,
     nombre character varying(100) NOT NULL,
     descripcion character varying(255),
-    imagen_url character varying
+    imagen_url character varying,
+    codigo character varying(20) NOT NULL
 );
 
 
@@ -4884,9 +4885,29 @@ CREATE TABLE public.productos (
     imagen_url character varying(1000),
     categoria_id bigint NOT NULL,
     activo boolean DEFAULT true NOT NULL,
+    codigo character varying(20) NOT NULL,
     CONSTRAINT chk_productos_precio CHECK ((precio >= (0)::numeric)),
     CONSTRAINT chk_productos_stock CHECK ((stock >= 0))
 );
+
+
+--
+-- Name: productos_codigo_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.productos_codigo_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: productos_codigo_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.productos_codigo_seq OWNED BY public.productos.codigo;
 
 
 --
@@ -5288,6 +5309,13 @@ ALTER TABLE ONLY public.detalle_ventas ALTER COLUMN id SET DEFAULT nextval('publ
 --
 
 ALTER TABLE ONLY public.productos ALTER COLUMN id SET DEFAULT nextval('public.productos_id_seq'::regclass);
+
+
+--
+-- Name: productos codigo; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.productos ALTER COLUMN codigo SET DEFAULT ('PRD-'::text || lpad((nextval('public.productos_codigo_seq'::regclass))::text, 4, '0'::text));
 
 
 --
@@ -6410,6 +6438,13 @@ CREATE INDEX ix_pending_user ON bot.pending_actions USING btree (user_id) WHERE 
 
 
 --
+-- Name: categorias_codigo_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX categorias_codigo_key ON public.categorias USING btree (codigo);
+
+
+--
 -- Name: ix_detalle_ventas_producto_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6470,6 +6505,13 @@ CREATE INDEX ix_ventas_fecha ON public.ventas USING btree (fecha);
 --
 
 CREATE INDEX ix_ventas_usuario_id ON public.ventas USING btree (usuario_id);
+
+
+--
+-- Name: productos_codigo_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX productos_codigo_key ON public.productos USING btree (codigo);
 
 
 --
@@ -7292,5 +7334,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict vzg4qdoTnpJDwDkXJ76nrZOQFIBO34BJvc25363VQGRJneFxlBaqyLEFga47mdr
+\unrestrict HeshthlPYBg4btGgPhIy3vKJB2f5BoUPpofOs2EBaygUNGeQTrRMpQENjqwX9JD
 
