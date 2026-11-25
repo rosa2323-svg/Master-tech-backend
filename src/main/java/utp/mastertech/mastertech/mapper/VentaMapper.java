@@ -35,6 +35,24 @@ public class VentaMapper {
             dto.setUsuarioTelefono(venta.getUsuario().getNumeroTelefono());
         }
 
+        dto.setTipoEntrega(venta.getTipoEntrega());
+        dto.setCostoEnvio(venta.getCostoEnvio());
+        // Pedidos antiguos sin copia propia: se muestra la dirección actual del perfil.
+        dto.setDireccionEntrega(venta.getDireccionEntrega() != null
+                ? venta.getDireccionEntrega()
+                : dto.getUsuarioDireccion());
+        dto.setLatitudEntrega(venta.getLatitudEntrega());
+        dto.setLongitudEntrega(venta.getLongitudEntrega());
+        dto.setDistanciaKm(venta.getDistanciaKm());
+        dto.setFechaEstimadaEntrega(venta.getFechaEstimadaEntrega());
+        dto.setFechaEntregaReal(venta.getFechaEntregaReal());
+        dto.setFechaAnulacion(venta.getFechaAnulacion());
+        dto.setMotivoAnulacion(venta.getMotivoAnulacion());
+        if (venta.getPuntoReparto() != null) {
+            dto.setPuntoRepartoId(venta.getPuntoReparto().getId());
+            dto.setPuntoRepartoNombre(venta.getPuntoReparto().getNombre());
+        }
+
         // Mapear los detalles usando DetalleVentaMapper
         if (venta.getDetalles() != null) {
             dto.setDetalles(
