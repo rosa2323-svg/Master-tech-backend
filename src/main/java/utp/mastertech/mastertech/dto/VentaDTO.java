@@ -3,6 +3,7 @@ package utp.mastertech.mastertech.dto;
 import lombok.Data;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -30,6 +31,30 @@ public class VentaDTO {
     private String usuarioDireccion;
 
     private String usuarioTelefono;
+
+    private String tipoEntrega;
+
+    private BigDecimal costoEnvio;
+
+    private String direccionEntrega;
+
+    private BigDecimal latitudEntrega;
+
+    private BigDecimal longitudEntrega;
+
+    private BigDecimal distanciaKm;
+
+    private Long puntoRepartoId;
+
+    private String puntoRepartoNombre;
+
+    private LocalDate fechaEstimadaEntrega;
+
+    private LocalDateTime fechaEntregaReal;
+
+    private LocalDateTime fechaAnulacion;
+
+    private String motivoAnulacion;
 
     private List<DetalleVentaDTO> detalles;
 }
