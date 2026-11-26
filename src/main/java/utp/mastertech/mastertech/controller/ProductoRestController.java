@@ -3,10 +3,12 @@ package utp.mastertech.mastertech.controller;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import org.springframework.http.HttpStatus;
+import utp.mastertech.mastertech.dto.CambioActivoDTO;
 import utp.mastertech.mastertech.dto.ProductoDTO;
 import utp.mastertech.mastertech.mapper.ProductoMapper;
 import utp.mastertech.mastertech.model.Categoria;
@@ -30,17 +32,31 @@ public class ProductoRestController {
     @Autowired
     private ProductoMapper productoMapper;
 
+    /** Solo un ADMIN autenticado puede ver los productos inhabilitados. */
+    private static boolean esAdmin(Authentication auth) {
+        return auth != null && auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
+    /**
+     * Catálogo público: solo productos habilitados. Con {@code ?todos=true} y un token de ADMIN
+     * incluye también los inhabilitados (para el panel de administración).
+     */
     @GetMapping
-    public List<ProductoDTO> listarTodos() {
-        return productoService.listarProductos()
-                .stream()
+    public List<ProductoDTO> listarTodos(@RequestParam(defaultValue = "false") boolean todos,
+                                         Authentication auth) {
+        List<Producto> lista = todos && esAdmin(auth)
+                ? productoService.listarProductos()
+                : productoService.listarProductosActivos();
+        return lista.stream()
                 .map(productoMapper::toDTO)
                 .collect(Collectors.toList());
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<ProductoDTO> obtenerPorId(@PathVariable Long id) {
+    public ResponseEntity<ProductoDTO> obtenerPorId(@PathVariable Long id, Authentication auth) {
         return productoService.obtenerProducto(id)
+                .filter(p -> !Boolean.FALSE.equals(p.getActivo()) || esAdmin(auth))
                 .map(productoMapper::toDTO)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -78,19 +94,20 @@ public class ProductoRestController {
         return productoMapper.toDTO(guardado);
     }
 
-    @DeleteMapping("/{id}")
-    public ResponseEntity<Void> eliminarProducto(@PathVariable Long id) {
-        if (productoService.obtenerProducto(id).isEmpty())
-            return ResponseEntity.notFound().build();
-        productoService.eliminarProducto(id);
-        return ResponseEntity.noContent().build();
+    /**
+     * Habilita o inhabilita un producto (baja lógica). Reemplaza al borrado: el producto no se elimina,
+     * así se conserva el historial de ventas y se puede volver a habilitar. Solo ADMIN.
+     */
+    @PatchMapping("/{id}/activo")
+    public ProductoDTO cambiarActivo(@PathVariable Long id, @Valid @RequestBody CambioActivoDTO dto) {
+        return productoMapper.toDTO(productoService.cambiarActivo(id, dto.getActivo()));
     }
 
     @GetMapping("/keywords")
     public ResponseEntity<List<String>> getKeywords(@RequestParam String term) {
         String lowerTerm = term.toLowerCase();
 
-        List<String> productos = productoService.listarProductos().stream()
+        List<String> productos = productoService.listarProductosActivos().stream()
                 .filter(p -> (p.getNombre() != null && p.getNombre().toLowerCase().contains(lowerTerm)) ||
                         (p.getCategoria() != null && p.getCategoria().getNombre().toLowerCase().contains(lowerTerm)))
                 .map(p -> p.getNombre())

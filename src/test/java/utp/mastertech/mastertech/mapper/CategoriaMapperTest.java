@@ -57,4 +57,19 @@ class CategoriaMapperTest {
         assertNull(mapper.toDTO(null));
         assertNull(mapper.toEntity(null));
     }
+
+    @Test
+    void codigoViajaAlDtoPeroNuncaSeCopiaDesdeElCliente() {
+        Categoria c = new Categoria();
+        c.setCodigo("LAP");
+        assertEquals("LAP", mapper.toDTO(c).getCodigo());
+
+        CategoriaDTO dto = new CategoriaDTO();
+        dto.setNombre("Audio");
+        dto.setCodigo("HACK-1");
+        assertNull(mapper.toEntity(dto).getCodigo());
+
+        mapper.updateEntityFromDTO(dto, c);
+        assertEquals("LAP", c.getCodigo());
+    }
 }

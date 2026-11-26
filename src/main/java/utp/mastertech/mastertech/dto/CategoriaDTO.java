@@ -8,6 +8,7 @@ import lombok.Data;
 public class CategoriaDTO {
 
     private Long id;
+    private String codigo;
 
     @NotBlank(message = "El nombre de la categoría no puede estar vacío")
     @Size(max = 100, message = "El nombre no puede exceder los 100 caracteres")

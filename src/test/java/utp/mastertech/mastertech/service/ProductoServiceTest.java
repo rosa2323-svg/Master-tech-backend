@@ -7,6 +7,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.model.Categoria;
 import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.repository.CategoriaRepository;
@@ -130,32 +131,191 @@ class ProductoServiceTest {
         verify(storageService, never()).eliminarPorUrl(any());
     }
 
-    // ---------- eliminar ----------
+    // ---------- código (abreviatura de categoría + número) ----------
 
     @Test
-    void eliminarProductoBorraLaFilaYLuegoLaImagen() {
+    void productoNuevoRecibeCodigoPRDConCuatroDigitos() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(7L);
+        Producto p = new Producto();
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-0007", p.getCodigo());
+        verify(productoRepository).save(p);
+    }
+
+    @Test
+    void productoNuevoConImagenTambienRecibeCodigo() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(12L);
+        when(storageService.subirImagenProducto(imagen)).thenReturn("http://bucket/n.png");
+        Producto p = new Producto();
+
+        service.guardarProducto(p, imagen);
+
+        assertEquals("PRD-0012", p.getCodigo());
+    }
+
+    @Test
+    void productoExistenteConservaSuCodigoYNoConsumeLaSecuencia() {
+        Producto p = new Producto();
+        p.setCodigo("PRD-0003");
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-0003", p.getCodigo());
+        verify(productoRepository, never()).siguienteNumeroCodigo();
+    }
+
+    @Test
+    void elCodigoSuperaLosCuatroDigitosSinTruncarse() {
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(10000L);
+        Producto p = new Producto();
+
+        service.guardarProducto(p);
+
+        assertEquals("PRD-10000", p.getCodigo());
+    }
+
+    private Producto productoDeCategoria(long categoriaId) {
+        Categoria stub = new Categoria();
+        stub.setId(categoriaId);
+        Producto p = new Producto();
+        p.setCategoria(stub);
+        return p;
+    }
+
+    @Test
+    void productoNuevoUsaLaAbreviaturaDeSuCategoria() {
+        Categoria laptops = new Categoria();
+        laptops.setId(13L);
+        laptops.setCodigo("LAP");
+        when(categoriaRepository.findById(13L)).thenReturn(Optional.of(laptops));
+        when(productoRepository.siguienteNumeroCodigo()).thenReturn(7L);
+        Producto p = productoDeCategoria(13L);
+
+        service.guardarProducto(p);
+
+        assertEquals("LAP-0007", p.getCodigo());
+    }
+
+    @Test
+    void productoConCategoriaInexistenteFalla() {
+        when(categoriaRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> service.guardarProducto(productoDeCategoria(99L)));
+        verify(productoRepository, never()).save(any());
+    }
+
+    @Test
+    void moverProductoDeCategoriaNoCambiaSuCodigo() {
+        Producto p = productoDeCategoria(14L);
+        p.setCodigo("LAP-0003");
+
+        service.guardarProducto(p);
+
+        assertEquals("LAP-0003", p.getCodigo());
+        verify(categoriaRepository, never()).findById(any());
+    }
+
+    @Test
+    void categoriaNuevaRecibeTresLetrasSinTildes() {
+        Categoria c = new Categoria();
+        c.setNombre("Periféricos");
+
+        service.guardarCategoria(c);
+
+        assertEquals("PER", c.getCodigo());
+        verify(categoriaRepository).save(c);
+    }
+
+    @Test
+    void categoriaConAbreviaturaOcupadaUsaCuatroLetras() {
+        when(categoriaRepository.existsByCodigo("CON")).thenReturn(true);
+        Categoria c = new Categoria();
+        c.setNombre("Consolas retro");
+
+        service.guardarCategoria(c);
+
+        assertEquals("CONS", c.getCodigo());
+    }
+
+    @Test
+    void categoriaConTresYCuatroLetrasOcupadasUsaDosLetrasMasNumero() {
+        when(categoriaRepository.existsByCodigo("LAP")).thenReturn(true);
+        when(categoriaRepository.existsByCodigo("LAPT")).thenReturn(true);
+        Categoria c = new Categoria();
+        c.setNombre("Laptops");
+
+        service.guardarCategoria(c);
+
+        assertEquals("LA2", c.getCodigo());
+    }
+
+    @Test
+    void categoriaConNombreSinLetrasUsaCAT() {
+        Categoria c = new Categoria();
+        c.setNombre("123");
+
+        service.guardarCategoria(c);
+
+        assertEquals("CAT", c.getCodigo());
+    }
+
+    @Test
+    void categoriaExistenteConservaSuCodigo() {
+        Categoria c = new Categoria();
+        c.setNombre("Laptops");
+        c.setCodigo("LAP");
+
+        service.guardarCategoria(c);
+
+        assertEquals("LAP", c.getCodigo());
+        verify(categoriaRepository, never()).existsByCodigo(any());
+    }
+
+    // ---------- habilitar / inhabilitar ----------
+
+    @Test
+    void cambiarActivoInhabilitaElProductoSinBorrarFilaNiImagen() {
         Producto p = new Producto();
         p.setId(8L);
         p.setImagenUrl("http://bucket/p8.png");
         when(productoRepository.findById(8L)).thenReturn(Optional.of(p));
+        when(productoRepository.save(p)).thenReturn(p);
 
-        service.eliminarProducto(8L);
+        Producto r = service.cambiarActivo(8L, false);
 
-        InOrder orden = inOrder(productoRepository, storageService);
-        orden.verify(productoRepository).deleteById(8L);
-        orden.verify(storageService).eliminarPorUrl("http://bucket/p8.png");
+        assertFalse(r.getActivo());
+        verify(productoRepository).save(p);
+        verify(productoRepository, never()).deleteById(any());
+        verifyNoInteractions(storageService);
     }
 
     @Test
-    void siNoSePuedeBorrarElProductoLaImagenNoSeToca() {
+    void cambiarActivoVuelveAHabilitarUnProducto() {
         Producto p = new Producto();
-        p.setImagenUrl("http://bucket/p8.png");
+        p.setId(8L);
+        p.setActivo(false);
         when(productoRepository.findById(8L)).thenReturn(Optional.of(p));
-        doThrow(new RuntimeException("tiene ventas")).when(productoRepository).deleteById(8L);
+        when(productoRepository.save(p)).thenReturn(p);
 
-        assertThrows(RuntimeException.class, () -> service.eliminarProducto(8L));
+        assertTrue(service.cambiarActivo(8L, true).getActivo());
+    }
 
-        verifyNoInteractions(storageService);
+    @Test
+    void cambiarActivoDeProductoInexistenteLanzaNoEncontrado() {
+        when(productoRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> service.cambiarActivo(99L, false));
+        verify(productoRepository, never()).save(any());
+    }
+
+    @Test
+    void listarProductosActivosUsaSoloLosHabilitados() {
+        when(productoRepository.findByActivoTrue()).thenReturn(List.of(new Producto()));
+
+        assertEquals(1, service.listarProductosActivos().size());
+        verify(productoRepository, never()).findAll();
     }
 
     // ---------- categorías ----------

@@ -13,6 +13,7 @@ public class CategoriaMapper {
 
         CategoriaDTO dto = new CategoriaDTO();
         dto.setId(categoria.getId());
+        dto.setCodigo(categoria.getCodigo());   // solo lectura: lo asigna el servidor
         dto.setNombre(categoria.getNombre());
         dto.setDescripcion(categoria.getDescripcion());
         dto.setImagenUrl(categoria.getImagenUrl());   // solo lectura: la URL la fija el servidor al subir la imagen

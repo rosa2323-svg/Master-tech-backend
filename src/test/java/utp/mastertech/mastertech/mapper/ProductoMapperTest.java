@@ -79,4 +79,43 @@ class ProductoMapperTest {
         assertEquals(5, p.getStock());
         assertEquals(3L, p.getCategoria().getId());
     }
+
+    @Test
+    void activoSeCopiaAlDtoYPorDefectoEsTrueAlConvertirAEntidad() {
+        Producto p = new Producto();
+        p.setActivo(false);
+        assertEquals(Boolean.FALSE, mapper.toDTO(p).getActivo());
+
+        ProductoDTO dto = new ProductoDTO();
+        assertEquals(Boolean.TRUE, mapper.toEntity(dto).getActivo());
+        dto.setActivo(false);
+        assertEquals(Boolean.FALSE, mapper.toEntity(dto).getActivo());
+    }
+
+    @Test
+    void updateConservaActivoSiElDtoNoLoTraeYLoCambiaSiLoTrae() {
+        Producto p = new Producto();
+        p.setActivo(false);
+        ProductoDTO dto = new ProductoDTO();
+        mapper.updateEntityFromDTO(dto, p);
+        assertEquals(Boolean.FALSE, p.getActivo());
+
+        dto.setActivo(true);
+        mapper.updateEntityFromDTO(dto, p);
+        assertEquals(Boolean.TRUE, p.getActivo());
+    }
+
+    @Test
+    void codigoViajaAlDtoPeroNuncaSeCopiaDesdeElCliente() {
+        Producto p = new Producto();
+        p.setCodigo("PRD-0042");
+        assertEquals("PRD-0042", mapper.toDTO(p).getCodigo());
+
+        ProductoDTO dto = new ProductoDTO();
+        dto.setCodigo("HACK-1");
+        assertNull(mapper.toEntity(dto).getCodigo());
+
+        mapper.updateEntityFromDTO(dto, p);
+        assertEquals("PRD-0042", p.getCodigo());
+    }
 }
