@@ -10,6 +10,8 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import utp.mastertech.mastertech.dto.CotizacionDTO;
+import utp.mastertech.mastertech.dto.EntregaRequest;
 import utp.mastertech.mastertech.dto.VentaDTO;
 import utp.mastertech.mastertech.exception.ApiExceptionHandler;
 import utp.mastertech.mastertech.exception.ConflictException;
@@ -18,9 +20,11 @@ import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.service.PedidoService;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -57,12 +61,12 @@ class PedidoRestControllerTest {
 
     @Test
     void checkoutDevuelveLaUrlDeStripe() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList())).thenReturn("https://stripe.test/pay/abc");
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class))).thenReturn("https://stripe.test/pay/abc");
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}]}"))
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"entrega\":{\"direccion\":\"Av. Arequipa 123\",\"latitud\":-12.085,\"longitud\":-77.035}}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
@@ -74,7 +78,7 @@ class PedidoRestControllerTest {
         mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"items\":[]}"))
+                        .content("{\"items\":[],\"entrega\":{\"direccion\":\"Av. Arequipa 123\",\"latitud\":-12.085,\"longitud\":-77.035}}"))
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(pedidoService);
@@ -85,20 +89,76 @@ class PedidoRestControllerTest {
         mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":0}]}"))
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":0}],\"entrega\":{\"direccion\":\"Av. Arequipa 123\",\"latitud\":-12.085,\"longitud\":-77.035}}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void checkoutSinStockDevuelve409() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList()))
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class)))
                 .thenThrow(new StockInsuficienteException(List.of("Solo hay 1 unidades disponibles de \"Mouse\".")));
 
         mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":5}]}"))
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":5}],\"entrega\":{\"direccion\":\"Av. Arequipa 123\",\"latitud\":-12.085,\"longitud\":-77.035}}"))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void checkoutSinEntregaDevuelve400() throws Exception {
+        mvc.perform(post("/api/v1/pedidos/checkout")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}]}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(pedidoService);
+    }
+
+    @Test
+    void checkoutSinCoberturaDevuelve400ConElMensaje() throws Exception {
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class)))
+                .thenThrow(new IllegalArgumentException("Todavía no llegamos a esa dirección."));
+
+        String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"entrega\":{\"direccion\":\"Av. Arequipa 123\",\"latitud\":-12.085,\"longitud\":-77.035}}"))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(cuerpo.contains("Todavía no llegamos a esa dirección."));
+    }
+
+    @Test
+    void cotizarDevuelveCostoYFechas() throws Exception {
+        CotizacionDTO dto = new CotizacionDTO();
+        dto.setCubierto(true);
+        dto.setCostoEnvio(new BigDecimal("12.00"));
+        dto.setSedeNombre("Almacén Sur");
+        when(pedidoService.cotizar(anyList(), any(BigDecimal.class), any(BigDecimal.class))).thenReturn(dto);
+
+        String cuerpo = mvc.perform(post("/api/v1/pedidos/cotizar")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"latitud\":-12.085,\"longitud\":-77.035}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(cuerpo.contains("\"cubierto\":true"));
+        assertTrue(cuerpo.contains("Almacén Sur"));
+    }
+
+    @Test
+    void cotizarSinUbicacionDevuelve400() throws Exception {
+        mvc.perform(post("/api/v1/pedidos/cotizar")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}]}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(pedidoService);
     }
 
     @Test

@@ -67,10 +67,6 @@ public class VentaService {
                 continue;
             }
             Producto p = opt.get();
-            if (Boolean.FALSE.equals(p.getActivo())) {
-                errores.add("\"" + p.getNombre() + "\" ya no está disponible.");
-                continue;
-            }
             int stockActual = p.getStock() != null ? p.getStock() : 0;
             if (item.getCantidad() > stockActual) {
                 errores.add("Solo hay " + stockActual + " unidades disponibles de \"" + p.getNombre() + "\".");
@@ -86,6 +82,13 @@ public class VentaService {
      */
     @Transactional
     public Venta procesarVenta(List<ItemPedidoDTO> itemsEntrada, Usuario usuario, String numeroOrden) {
+        return procesarVenta(itemsEntrada, usuario, numeroOrden, null);
+    }
+
+    /** Igual que la anterior, copiando además los datos de entrega a la venta (null = valores por defecto). */
+    @Transactional
+    public Venta procesarVenta(List<ItemPedidoDTO> itemsEntrada, Usuario usuario, String numeroOrden,
+                               EntregaPedido entrega) {
         Optional<Venta> existente = ventaRepository.findByNumeroOrden(numeroOrden);
         if (existente.isPresent()) {
             return existente.get();
@@ -139,6 +142,16 @@ public class VentaService {
         venta.setNumeroOrden(numeroOrden);
         venta.setUsuario(usuario);
         venta.setDetalles(detalles);
+        if (entrega != null) {
+            venta.setTipoEntrega(entrega.tipo());
+            venta.setCostoEnvio(entrega.costoEnvio());
+            venta.setDireccionEntrega(entrega.direccion());
+            venta.setLatitudEntrega(entrega.latitud());
+            venta.setLongitudEntrega(entrega.longitud());
+            venta.setDistanciaKm(entrega.distanciaKm());
+            venta.setPuntoReparto(entrega.sede());
+            venta.setFechaEstimadaEntrega(entrega.fechaEstimada());
+        }
         return ventaRepository.save(venta);
     }
 

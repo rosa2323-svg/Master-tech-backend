@@ -16,7 +16,10 @@ import utp.mastertech.mastertech.repository.DetalleVentaRepository;
 import utp.mastertech.mastertech.repository.ProductoRepository;
 import utp.mastertech.mastertech.repository.VentaRepository;
 
+import utp.mastertech.mastertech.model.PuntoReparto;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -127,6 +130,42 @@ class VentaServiceTest {
         assertNotNull(v.getFecha());
         verify(productoRepository).save(mouse);
         verify(productoRepository).save(teclado);
+    }
+
+    @Test
+    void procesarVentaConEntregaLaCopiaALaVentaSinSumarElEnvioAlTotal() {
+        Producto mouse = producto(1, "Mouse", 100.0, 10);
+        when(ventaRepository.findByNumeroOrden("MT-ABC1234")).thenReturn(Optional.empty());
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(mouse));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
+        PuntoReparto sede = new PuntoReparto();
+        sede.setId(3L);
+        EntregaPedido entrega = new EntregaPedido("DOMICILIO", new BigDecimal("12.00"), "Av. Arequipa 123",
+                new BigDecimal("-12.085"), new BigDecimal("-77.035"), new BigDecimal("7.35"), sede, LocalDate.of(2026, 12, 2));
+
+        Venta v = service.procesarVenta(List.of(item(1, 2)), new Usuario(), "MT-ABC1234", entrega);
+
+        assertEquals(0, new BigDecimal("200.00").compareTo(v.getTotal()), "total = solo productos");
+        assertEquals(0, new BigDecimal("12.00").compareTo(v.getCostoEnvio()));
+        assertEquals("DOMICILIO", v.getTipoEntrega());
+        assertEquals("Av. Arequipa 123", v.getDireccionEntrega());
+        assertEquals(0, new BigDecimal("7.35").compareTo(v.getDistanciaKm()));
+        assertSame(sede, v.getPuntoReparto());
+        assertEquals(LocalDate.of(2026, 12, 2), v.getFechaEstimadaEntrega());
+    }
+
+    @Test
+    void procesarVentaSinEntregaDejaLosValoresPorDefecto() {
+        Producto mouse = producto(1, "Mouse", 100.0, 10);
+        when(ventaRepository.findByNumeroOrden("MT-ABC1234")).thenReturn(Optional.empty());
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(mouse));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Venta v = service.procesarVenta(List.of(item(1, 1)), new Usuario(), "MT-ABC1234");
+
+        assertEquals("DOMICILIO", v.getTipoEntrega());
+        assertEquals(0, BigDecimal.ZERO.compareTo(v.getCostoEnvio()));
+        assertNull(v.getFechaEstimadaEntrega());
     }
 
     @Test
