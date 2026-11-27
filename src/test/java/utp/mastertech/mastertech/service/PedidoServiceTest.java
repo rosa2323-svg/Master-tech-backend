@@ -2,6 +2,7 @@ package utp.mastertech.mastertech.service;
 
 import com.stripe.exception.ApiConnectionException;
 import com.stripe.model.checkout.Session;
+import com.stripe.param.checkout.SessionCreateParams;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -11,16 +12,25 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import utp.mastertech.mastertech.dto.CotizacionDTO;
+import utp.mastertech.mastertech.dto.EntregaRequest;
 import utp.mastertech.mastertech.dto.ItemPedidoDTO;
 import utp.mastertech.mastertech.exception.ConflictException;
 import utp.mastertech.mastertech.exception.PagoException;
 import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.exception.StockInsuficienteException;
+import utp.mastertech.mastertech.model.Producto;
+import utp.mastertech.mastertech.model.PuntoReparto;
+import utp.mastertech.mastertech.model.TarifaEnvio;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.repository.ProductoRepository;
+import utp.mastertech.mastertech.repository.PuntoRepartoRepository;
 import utp.mastertech.mastertech.repository.UsuarioRepository;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +53,10 @@ class PedidoServiceTest {
     private ProductoRepository productoRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
+    @Mock
+    private PuntoRepartoRepository puntoRepartoRepository;
+    @Mock
+    private EnvioCotizacionService cotizacionService;
 
     @InjectMocks
     private PedidoService service;
@@ -57,6 +71,64 @@ class PedidoServiceTest {
         i.setProductoId(productoId);
         i.setCantidad(cantidad);
         return i;
+    }
+
+    private EntregaRequest entrega() {
+        EntregaRequest e = new EntregaRequest();
+        e.setDireccion("Av. Arequipa 123, Lince");
+        e.setLatitud(new BigDecimal("-12.085000"));
+        e.setLongitud(new BigDecimal("-77.035000"));
+        return e;
+    }
+
+    private Producto producto(long id, double precio) {
+        Producto p = new Producto();
+        p.setId(id);
+        p.setNombre("Producto " + id);
+        p.setPrecio(precio);
+        p.setStock(50);
+        return p;
+    }
+
+    private PuntoReparto sede(long id) {
+        PuntoReparto s = new PuntoReparto();
+        s.setId(id);
+        s.setNombre("Almacén Sur");
+        return s;
+    }
+
+    private EnvioCotizacionService.Cotizacion cotizacion(String costo, boolean gratis, PuntoReparto sede) {
+        TarifaEnvio t = new TarifaEnvio();
+        t.setNombre("5 a 10 km");
+        t.setDiasEntregaMin(1);
+        t.setDiasEntregaMax(2);
+        return new EnvioCotizacionService.Cotizacion(true, null, new BigDecimal(costo), gratis,
+                new BigDecimal("7.35"), sede, t,
+                new EnvioCotizacionService.VentanaEntrega(LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 2)));
+    }
+
+    /** Prepara el carrito [producto 1 x2 a S/100] y ejecuta el checkout con Stripe simulado. */
+    private SessionCreateParams checkoutConCotizacion(EnvioCotizacionService.Cotizacion c, BigDecimal[] subtotalVisto) {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(ventaService.validarStock(items)).thenReturn(List.of());
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        when(cotizacionService.cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
+                .thenAnswer(inv -> {
+                    subtotalVisto[0] = inv.getArgument(0);
+                    return c;
+                });
+        Session sesion = mock(Session.class);
+        when(sesion.getUrl()).thenReturn("https://stripe.test/pay");
+        ArgumentCaptor<SessionCreateParams> params = ArgumentCaptor.forClass(SessionCreateParams.class);
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.create(any(SessionCreateParams.class))).thenReturn(sesion);
+
+            assertEquals("https://stripe.test/pay", service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
+
+            stripe.verify(() -> Session.create(params.capture()));
+        }
+        return params.getValue();
     }
 
     private Session sesionPagada(String email, String items) {
@@ -74,7 +146,7 @@ class PedidoServiceTest {
         when(ventaService.consolidar(items)).thenReturn(items);
         when(ventaService.validarStock(items)).thenReturn(List.of("Solo hay 1 unidades disponibles de \"Mouse\"."));
 
-        assertThrows(StockInsuficienteException.class, () -> service.crearCheckout("ana@x.com", items));
+        assertThrows(StockInsuficienteException.class, () -> service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
 
         verifyNoInteractions(productoRepository);
     }
@@ -88,7 +160,221 @@ class PedidoServiceTest {
         when(ventaService.consolidar(muchos)).thenReturn(muchos);
         when(ventaService.validarStock(muchos)).thenReturn(List.of());
 
-        assertThrows(IllegalArgumentException.class, () -> service.crearCheckout("ana@x.com", muchos));
+        assertThrows(IllegalArgumentException.class, () -> service.crearCheckout("ana@x.com", muchos, "DOMICILIO", entrega(), null));
+    }
+
+    @Test
+    void crearCheckoutSinCoberturaLanzaIllegalArgumentYNoLlamaAStripe() {
+        List<ItemPedidoDTO> items = List.of(item(1, 1));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(ventaService.validarStock(items)).thenReturn(List.of());
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        when(cotizacionService.cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
+                .thenReturn(EnvioCotizacionService.Cotizacion.sinCobertura("Todavía no llegamos a esa dirección."));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
+
+        assertEquals("Todavía no llegamos a esa dirección.", ex.getMessage());
+    }
+
+    @Test
+    void crearCheckoutAgregaElEnvioComoLineaYGuardaLaEntregaEnLaMetadata() {
+        BigDecimal[] subtotal = new BigDecimal[1];
+
+        SessionCreateParams params = checkoutConCotizacion(cotizacion("12.00", false, sede(3)), subtotal);
+
+        assertEquals(0, new BigDecimal("200").compareTo(subtotal[0]), "el envío se cotiza sobre el subtotal de productos");
+        assertEquals(2, params.getLineItems().size());
+        assertEquals(10000L, params.getLineItems().get(0).getPriceData().getUnitAmount());
+        assertEquals(1200L, params.getLineItems().get(1).getPriceData().getUnitAmount());
+        assertEquals("Envío a domicilio", params.getLineItems().get(1).getPriceData().getProductData().getName());
+        assertEquals("pen", params.getLineItems().get(1).getPriceData().getCurrency());
+        Map<String, String> m = params.getMetadata();
+        assertEquals("DOMICILIO", m.get("tipo"));
+        assertEquals("12.00", m.get("envio"));
+        assertEquals("7.35", m.get("km"));
+        assertEquals("3", m.get("sede"));
+        assertEquals("1:2", m.get("plazo"));
+        assertEquals("Av. Arequipa 123, Lince", m.get("dir"));
+        assertEquals("-12.085000", m.get("lat"));
+        assertEquals("-77.035000", m.get("lng"));
+    }
+
+    @Test
+    void crearCheckoutConEnvioGratisNoAgregaLineaDeEnvio() {
+        SessionCreateParams params = checkoutConCotizacion(cotizacion("0.00", true, sede(3)), new BigDecimal[1]);
+
+        assertEquals(1, params.getLineItems().size());
+        assertEquals("0.00", params.getMetadata().get("envio"));
+    }
+
+    // ---------- cotizar ----------
+
+    @Test
+    void cotizarCalculaElSubtotalConPreciosDeLaBdYArmaLaRespuesta() {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        BigDecimal[] visto = new BigDecimal[1];
+        when(cotizacionService.cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
+                .thenAnswer(inv -> {
+                    visto[0] = inv.getArgument(0);
+                    return cotizacion("12.00", false, sede(3));
+                });
+
+        CotizacionDTO dto = service.cotizar(items, "DOMICILIO", new BigDecimal("-12.08"), new BigDecimal("-77.03"), null);
+
+        assertEquals(0, new BigDecimal("200.00").compareTo(visto[0]));
+        assertTrue(dto.isCubierto());
+        assertEquals(0, new BigDecimal("200.00").compareTo(dto.getSubtotal()));
+        assertEquals(0, new BigDecimal("12.00").compareTo(dto.getCostoEnvio()));
+        assertEquals(0, new BigDecimal("212.00").compareTo(dto.getTotal()));
+        assertFalse(dto.isEnvioGratis());
+        assertEquals("Almacén Sur", dto.getSedeNombre());
+        assertEquals("5 a 10 km", dto.getTarifaNombre());
+        assertEquals(LocalDate.of(2026, 12, 1), dto.getEntregaDesde());
+        assertEquals(LocalDate.of(2026, 12, 2), dto.getEntregaHasta());
+    }
+
+    @Test
+    void cotizarSinCoberturaSoloDevuelveElMensaje() {
+        List<ItemPedidoDTO> items = List.of(item(1, 1));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        when(cotizacionService.cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
+                .thenReturn(EnvioCotizacionService.Cotizacion.sinCobertura("Todavía no llegamos a esa dirección."));
+
+        CotizacionDTO dto = service.cotizar(items, "DOMICILIO", BigDecimal.ONE, BigDecimal.ONE, null);
+
+        assertFalse(dto.isCubierto());
+        assertEquals("Todavía no llegamos a esa dirección.", dto.getMensaje());
+        assertNull(dto.getCostoEnvio());
+    }
+
+    @Test
+    void cotizarConProductoInexistenteLanzaNotFound() {
+        List<ItemPedidoDTO> items = List.of(item(9, 1));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(9L)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> service.cotizar(items, "DOMICILIO", BigDecimal.ONE, BigDecimal.ONE, null));
+    }
+
+    // ---------- recojo en tienda ----------
+
+    private PuntoReparto sedeRecojo(long id, boolean activo, boolean permiteRecojo) {
+        PuntoReparto s = sede(id);
+        s.setDireccion("Av. Huaylas 1200, Chorrillos");
+        s.setLatitud(new BigDecimal("-12.170000"));
+        s.setLongitud(new BigDecimal("-77.010000"));
+        s.setActivo(activo);
+        s.setPermiteRecojo(permiteRecojo);
+        return s;
+    }
+
+    private void carritoConUnProducto() {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(ventaService.validarStock(items)).thenReturn(List.of());
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+    }
+
+    @Test
+    void crearCheckoutParaRecojoNoCobraEnvioNiCotiza() {
+        carritoConUnProducto();
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
+        Session sesion = mock(Session.class);
+        when(sesion.getUrl()).thenReturn("https://stripe.test/pay");
+        ArgumentCaptor<SessionCreateParams> params = ArgumentCaptor.forClass(SessionCreateParams.class);
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.create(any(SessionCreateParams.class))).thenReturn(sesion);
+
+            service.crearCheckout("ana@x.com", List.of(item(1, 2)), "RECOJO", null, 3L);
+
+            stripe.verify(() -> Session.create(params.capture()));
+        }
+
+        assertEquals(1, params.getValue().getLineItems().size(), "solo el producto: el recojo no cobra envío");
+        Map<String, String> m = params.getValue().getMetadata();
+        assertEquals("RECOJO", m.get("tipo"));
+        assertEquals("Av. Huaylas 1200, Chorrillos", m.get("dir"));
+        assertEquals("0.00", m.get("envio"));
+        assertEquals("3", m.get("sede"));
+        assertEquals("0:0", m.get("plazo"));
+        verifyNoInteractions(cotizacionService);
+    }
+
+    @Test
+    void crearCheckoutParaRecojoSinSedeLanzaIllegalArgument() {
+        carritoConUnProducto();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.crearCheckout("ana@x.com", List.of(item(1, 2)), "RECOJO", null, null));
+    }
+
+    @Test
+    void crearCheckoutParaRecojoRechazaSedesInexistentesInactivasOSinRecojo() {
+        carritoConUnProducto();
+        when(puntoRepartoRepository.findById(1L)).thenReturn(Optional.empty());
+        when(puntoRepartoRepository.findById(2L)).thenReturn(Optional.of(sedeRecojo(2, false, true)));
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, false)));
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+
+        for (long id : new long[]{1, 2, 3}) {
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.crearCheckout("ana@x.com", items, "RECOJO", null, id));
+            assertEquals("Ese punto de recojo no está disponible.", ex.getMessage());
+        }
+    }
+
+    @Test
+    void crearCheckoutADomicilioSinDireccionLanzaIllegalArgument() {
+        carritoConUnProducto();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.crearCheckout("ana@x.com", List.of(item(1, 2)), "DOMICILIO", null, null));
+        verifyNoInteractions(cotizacionService);
+    }
+
+    @Test
+    void cotizarRecojoEsGratisYListoDesdeLaFechaDePreparacion() {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
+        when(cotizacionService.estimarEntrega(eq(0), eq(0), any(Instant.class)))
+                .thenReturn(new EnvioCotizacionService.VentanaEntrega(LocalDate.of(2026, 11, 26), LocalDate.of(2026, 11, 26)));
+
+        CotizacionDTO dto = service.cotizar(items, "RECOJO", null, null, 3L);
+
+        assertTrue(dto.isCubierto());
+        assertEquals("RECOJO", dto.getTipoEntrega());
+        assertEquals(0, BigDecimal.ZERO.compareTo(dto.getCostoEnvio()));
+        assertEquals(0, new BigDecimal("200.00").compareTo(dto.getTotal()));
+        assertTrue(dto.isEnvioGratis());
+        assertEquals("Av. Huaylas 1200, Chorrillos", dto.getSedeDireccion());
+        assertEquals(LocalDate.of(2026, 11, 26), dto.getEntregaDesde());
+        verify(cotizacionService, never()).cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class));
+    }
+
+    @Test
+    void cotizarADomicilioSinUbicacionLanzaIllegalArgument() {
+        List<ItemPedidoDTO> items = List.of(item(1, 1));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+
+        assertThrows(IllegalArgumentException.class, () -> service.cotizar(items, "DOMICILIO", null, null, null));
+    }
+
+    @Test
+    void puntosRecojoSoloIncluyeSedesActivasQueLoPermiten() {
+        PuntoReparto conRecojo = sedeRecojo(1, true, true);
+        PuntoReparto sinRecojo = sedeRecojo(2, true, false);
+        when(puntoRepartoRepository.findByActivoTrue()).thenReturn(List.of(conRecojo, sinRecojo));
+
+        assertEquals(List.of(conRecojo), service.puntosRecojo());
     }
 
     // ---------- confirmar ----------
@@ -147,7 +433,7 @@ class PedidoServiceTest {
         Venta venta = new Venta();
         Session s = sesionPagada("ANA@x.com", "12:2,15:1");
         when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
-        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString())).thenReturn(venta);
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(venta);
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
@@ -160,7 +446,7 @@ class PedidoServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ItemPedidoDTO>> items = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<String> orden = ArgumentCaptor.forClass(String.class);
-        verify(ventaService).procesarVenta(items.capture(), eq(usuario), orden.capture());
+        verify(ventaService).procesarVenta(items.capture(), eq(usuario), orden.capture(), isNull(), any());
 
         assertEquals(2, items.getValue().size());
         assertEquals(12L, items.getValue().get(0).getProductoId());
@@ -176,7 +462,7 @@ class PedidoServiceTest {
         Usuario usuario = new Usuario();
         Session s = sesionPagada("ana@x.com", "1:1");
         when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
-        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString())).thenReturn(new Venta());
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(new Venta());
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.retrieve("cs_misma")).thenReturn(s);
@@ -185,7 +471,40 @@ class PedidoServiceTest {
         }
 
         ArgumentCaptor<String> orden = ArgumentCaptor.forClass(String.class);
-        verify(ventaService, times(2)).procesarVenta(anyList(), eq(usuario), orden.capture());
+        verify(ventaService, times(2)).procesarVenta(anyList(), eq(usuario), orden.capture(), isNull(), any());
         assertEquals(orden.getAllValues().get(0), orden.getAllValues().get(1));
+    }
+
+    @Test
+    void confirmarCopiaLaEntregaDeLaMetadataALaVenta() {
+        Usuario usuario = new Usuario();
+        PuntoReparto sede = sede(3);
+        Session s = mock(Session.class);
+        when(s.getPaymentStatus()).thenReturn("paid");
+        when(s.getMetadata()).thenReturn(Map.of(
+                "email", "ana@x.com", "items", "1:2", "tipo", "DOMICILIO",
+                "dir", "Av. Arequipa 123, Lince", "lat", "-12.085000", "lng", "-77.035000",
+                "envio", "12.00", "km", "7.35", "sede", "3", "plazo", "1:2"));
+        when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sede));
+        when(cotizacionService.estimarEntrega(eq(1), eq(2), any(Instant.class)))
+                .thenReturn(new EnvioCotizacionService.VentanaEntrega(LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 2)));
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), any(EntregaPedido.class), any())).thenReturn(new Venta());
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
+            service.confirmar("ana@x.com", "cs_1");
+        }
+
+        ArgumentCaptor<EntregaPedido> entrega = ArgumentCaptor.forClass(EntregaPedido.class);
+        verify(ventaService).procesarVenta(anyList(), eq(usuario), anyString(), entrega.capture(), any());
+        EntregaPedido e = entrega.getValue();
+        assertEquals("DOMICILIO", e.tipo());
+        assertEquals(0, new BigDecimal("12.00").compareTo(e.costoEnvio()));
+        assertEquals("Av. Arequipa 123, Lince", e.direccion());
+        assertEquals(0, new BigDecimal("-12.085").compareTo(e.latitud()));
+        assertEquals(0, new BigDecimal("7.35").compareTo(e.distanciaKm()));
+        assertSame(sede, e.sede());
+        assertEquals(LocalDate.of(2026, 12, 2), e.fechaEstimada());
     }
 }

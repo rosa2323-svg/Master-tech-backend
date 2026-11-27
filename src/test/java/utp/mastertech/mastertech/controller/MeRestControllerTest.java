@@ -10,7 +10,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import utp.mastertech.mastertech.dto.EnvioEventoDTO;
 import utp.mastertech.mastertech.dto.VentaDTO;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
+import utp.mastertech.mastertech.mapper.EnvioMapper;
+import utp.mastertech.mastertech.model.EnvioEvento;
+import utp.mastertech.mastertech.service.VentaService;
+import java.time.LocalDateTime;
 import utp.mastertech.mastertech.exception.ApiExceptionHandler;
 import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.model.Usuario;
@@ -22,6 +28,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -33,6 +40,15 @@ class MeRestControllerTest {
     private UsuarioService usuarioService;
     @Mock
     private VentaMapper ventaMapper;
+    @Mock
+    private EnvioMapper envioMapper;
+    @Mock
+    private VentaService ventaService;
+
+    @Mock
+    private utp.mastertech.mastertech.service.ReembolsoService reembolsoService;
+    @Mock
+    private utp.mastertech.mastertech.mapper.ReembolsoMapper reembolsoMapper;
 
     @InjectMocks
     private MeRestController controller;
@@ -200,5 +216,60 @@ class MeRestControllerTest {
         mvc.perform(get("/api/v1/me/pedidos").principal(ana))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void seguimientoDevuelveElHistorialDelPedidoPropio() throws Exception {
+        EnvioEvento e = new EnvioEvento();
+        when(ventaService.listarEventosDelCliente(7L, "ana@x.com")).thenReturn(List.of(e));
+        when(envioMapper.toDTO(e)).thenReturn(new EnvioEventoDTO("En ruta", LocalDateTime.of(2026, 11, 26, 10, 0), "Luis", null));
+
+        mvc.perform(get("/api/v1/me/pedidos/7/seguimiento").principal(ana))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].estado").value("En ruta"))
+                .andExpect(jsonPath("$[0].usuarioNombre").value("Luis"));
+    }
+
+    @Test
+    void seguimientoDePedidoAjenoDevuelve404() throws Exception {
+        when(ventaService.listarEventosDelCliente(8L, "ana@x.com")).thenThrow(new ResourceNotFoundException("Venta no encontrada: 8"));
+
+        mvc.perform(get("/api/v1/me/pedidos/8/seguimiento").principal(ana))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void solicitarReembolsoDevuelve201() throws Exception {
+        utp.mastertech.mastertech.model.SolicitudReembolso s = new utp.mastertech.mastertech.model.SolicitudReembolso();
+        utp.mastertech.mastertech.dto.SolicitudReembolsoDTO d = new utp.mastertech.mastertech.dto.SolicitudReembolsoDTO();
+        d.setEstado("PENDIENTE");
+        when(reembolsoService.solicitar(8L, "ana@x.com", "Producto equivocado")).thenReturn(s);
+        when(reembolsoMapper.toDTO(s)).thenReturn(d);
+
+        mvc.perform(post("/api/v1/me/pedidos/8/reembolso").principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"motivo\":\"Producto equivocado\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.estado").value("PENDIENTE"));
+    }
+
+    @Test
+    void solicitarReembolsoSinMotivoValidoDevuelve400() throws Exception {
+        mvc.perform(post("/api/v1/me/pedidos/8/reembolso").principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"motivo\":\"\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(reembolsoService);
+    }
+
+    @Test
+    void misReembolsosListaLasSolicitudesDelCliente() throws Exception {
+        utp.mastertech.mastertech.model.SolicitudReembolso s = new utp.mastertech.mastertech.model.SolicitudReembolso();
+        utp.mastertech.mastertech.dto.SolicitudReembolsoDTO d = new utp.mastertech.mastertech.dto.SolicitudReembolsoDTO();
+        d.setEstado("RECHAZADA");
+        when(reembolsoService.listarDelCliente("ana@x.com")).thenReturn(List.of(s));
+        when(reembolsoMapper.toDTO(s)).thenReturn(d);
+
+        mvc.perform(get("/api/v1/me/reembolsos").principal(ana))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].estado").value("RECHAZADA"));
     }
 }

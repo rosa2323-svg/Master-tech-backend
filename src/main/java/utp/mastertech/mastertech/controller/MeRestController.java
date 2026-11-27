@@ -2,16 +2,24 @@ package utp.mastertech.mastertech.controller;
 
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import utp.mastertech.mastertech.dto.CambiarPasswordRequest;
+import utp.mastertech.mastertech.dto.EnvioEventoDTO;
+import utp.mastertech.mastertech.dto.SolicitudReembolsoDTO;
+import utp.mastertech.mastertech.dto.SolicitudReembolsoRequest;
 import utp.mastertech.mastertech.dto.PerfilDTO;
 import utp.mastertech.mastertech.dto.PerfilUpdateRequest;
 import utp.mastertech.mastertech.dto.VentaDTO;
+import utp.mastertech.mastertech.mapper.EnvioMapper;
+import utp.mastertech.mastertech.mapper.ReembolsoMapper;
 import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.model.Usuario;
+import utp.mastertech.mastertech.service.ReembolsoService;
 import utp.mastertech.mastertech.service.UsuarioService;
+import utp.mastertech.mastertech.service.VentaService;
 
 import java.util.List;
 import java.util.Map;
@@ -27,6 +35,18 @@ public class MeRestController {
 
     @Autowired
     private VentaMapper ventaMapper;
+
+    @Autowired
+    private EnvioMapper envioMapper;
+
+    @Autowired
+    private VentaService ventaService;
+
+    @Autowired
+    private ReembolsoService reembolsoService;
+
+    @Autowired
+    private ReembolsoMapper reembolsoMapper;
 
     @GetMapping
     public PerfilDTO verPerfil(Authentication auth) {
@@ -56,6 +76,31 @@ public class MeRestController {
         Usuario usuario = usuarioService.obtenerPorEmail(auth.getName());
         return usuarioService.obtenerHistorialCompras(usuario).stream()
                 .map(ventaMapper::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    /** Seguimiento de un pedido propio: por qué estados pasó y cuándo. */
+    @GetMapping("/pedidos/{id}/seguimiento")
+    public List<EnvioEventoDTO> seguimiento(@PathVariable Long id, Authentication auth) {
+        return ventaService.listarEventosDelCliente(id, auth.getName()).stream()
+                .map(envioMapper::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    /** El cliente pide el reembolso de un pedido propio (solo antes de que salga a reparto). */
+    @PostMapping("/pedidos/{id}/reembolso")
+    @ResponseStatus(HttpStatus.CREATED)
+    public SolicitudReembolsoDTO solicitarReembolso(@PathVariable Long id,
+                                                    @Valid @RequestBody SolicitudReembolsoRequest req,
+                                                    Authentication auth) {
+        return reembolsoMapper.toDTO(reembolsoService.solicitar(id, auth.getName(), req.getMotivo()));
+    }
+
+    /** Solicitudes de reembolso del cliente (para ver en Mis compras si están pendientes o rechazadas). */
+    @GetMapping("/reembolsos")
+    public List<SolicitudReembolsoDTO> misReembolsos(Authentication auth) {
+        return reembolsoService.listarDelCliente(auth.getName()).stream()
+                .map(reembolsoMapper::toDTO)
                 .collect(Collectors.toList());
     }
 

@@ -89,12 +89,35 @@ class VentaMapperTest {
 
     @Test
     void estadoDelFlujoDeDespachoSeMuestraTalCual() {
-        for (String estado : List.of("Pagado", "Preparando", "Despachado", "Entregado")) {
+        for (String estado : List.of("Pagado", "Preparando", "En ruta", "Listo para recoger", "Entregado", "ANULADA")) {
             Venta v = new Venta();
             v.setEstado(estado);
 
             assertEquals(estado, mapper.toDTO(v).getEstado());
         }
+    }
+
+    @Test
+    void elNombreAnteriorDespachadoSeMuestraComoEnRuta() {
+        Venta v = new Venta();
+        v.setEstado("Despachado");
+
+        assertEquals("En ruta", mapper.toDTO(v).getEstado());
+    }
+
+    @Test
+    void elDtoIndicaElSiguienteEstadoSegunElTipoDeEntrega() {
+        Venta domicilio = new Venta();
+        domicilio.setEstado("Preparando");
+        Venta recojo = new Venta();
+        recojo.setEstado("Preparando");
+        recojo.setTipoEntrega("RECOJO");
+        Venta entregada = new Venta();
+        entregada.setEstado("Entregado");
+
+        assertEquals("En ruta", mapper.toDTO(domicilio).getSiguienteEstado());
+        assertEquals("Listo para recoger", mapper.toDTO(recojo).getSiguienteEstado());
+        assertNull(mapper.toDTO(entregada).getSiguienteEstado());
     }
 
     @Test

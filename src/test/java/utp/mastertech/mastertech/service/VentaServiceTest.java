@@ -13,10 +13,17 @@ import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.repository.DetalleVentaRepository;
+import utp.mastertech.mastertech.repository.EnvioEventoRepository;
 import utp.mastertech.mastertech.repository.ProductoRepository;
+import utp.mastertech.mastertech.repository.UsuarioRepository;
+import org.mockito.ArgumentCaptor;
+import utp.mastertech.mastertech.model.EnvioEvento;
 import utp.mastertech.mastertech.repository.VentaRepository;
 
+import utp.mastertech.mastertech.model.PuntoReparto;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -33,6 +40,13 @@ class VentaServiceTest {
     private DetalleVentaRepository detalleVentaRepository;
     @Mock
     private ProductoRepository productoRepository;
+    @Mock
+    private EnvioEventoRepository envioEventoRepository;
+    @Mock
+    private UsuarioRepository usuarioRepository;
+
+    @Mock
+    private utp.mastertech.mastertech.repository.SolicitudReembolsoRepository solicitudReembolsoRepository;
 
     @InjectMocks
     private VentaService service;
@@ -130,6 +144,42 @@ class VentaServiceTest {
     }
 
     @Test
+    void procesarVentaConEntregaLaCopiaALaVentaSinSumarElEnvioAlTotal() {
+        Producto mouse = producto(1, "Mouse", 100.0, 10);
+        when(ventaRepository.findByNumeroOrden("MT-ABC1234")).thenReturn(Optional.empty());
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(mouse));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
+        PuntoReparto sede = new PuntoReparto();
+        sede.setId(3L);
+        EntregaPedido entrega = new EntregaPedido("DOMICILIO", new BigDecimal("12.00"), "Av. Arequipa 123",
+                new BigDecimal("-12.085"), new BigDecimal("-77.035"), new BigDecimal("7.35"), sede, LocalDate.of(2026, 12, 2));
+
+        Venta v = service.procesarVenta(List.of(item(1, 2)), new Usuario(), "MT-ABC1234", entrega);
+
+        assertEquals(0, new BigDecimal("200.00").compareTo(v.getTotal()), "total = solo productos");
+        assertEquals(0, new BigDecimal("12.00").compareTo(v.getCostoEnvio()));
+        assertEquals("DOMICILIO", v.getTipoEntrega());
+        assertEquals("Av. Arequipa 123", v.getDireccionEntrega());
+        assertEquals(0, new BigDecimal("7.35").compareTo(v.getDistanciaKm()));
+        assertSame(sede, v.getPuntoReparto());
+        assertEquals(LocalDate.of(2026, 12, 2), v.getFechaEstimadaEntrega());
+    }
+
+    @Test
+    void procesarVentaSinEntregaDejaLosValoresPorDefecto() {
+        Producto mouse = producto(1, "Mouse", 100.0, 10);
+        when(ventaRepository.findByNumeroOrden("MT-ABC1234")).thenReturn(Optional.empty());
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(mouse));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        Venta v = service.procesarVenta(List.of(item(1, 1)), new Usuario(), "MT-ABC1234");
+
+        assertEquals("DOMICILIO", v.getTipoEntrega());
+        assertEquals(0, BigDecimal.ZERO.compareTo(v.getCostoEnvio()));
+        assertNull(v.getFechaEstimadaEntrega());
+    }
+
+    @Test
     void procesarVentaEsIdempotentePorNumeroDeOrden() {
         Venta existente = new Venta();
         existente.setNumeroOrden("MT-ABC1234");
@@ -196,7 +246,7 @@ class VentaServiceTest {
         List<Venta> r = service.listarParaDespacho();
 
         assertEquals(1, r.size());
-        verify(ventaRepository).findByEstadoInOrderByIdDesc(List.of("Pagado", "Preparando", "Despachado", "Entregado"));
+        verify(ventaRepository).findByEstadoInOrderByIdDesc(List.of("Pagado", "Preparando", "En ruta", "Listo para recoger", "Entregado"));
     }
 
     @Test
@@ -218,10 +268,155 @@ class VentaServiceTest {
         when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
 
         service.cambiarEstado(1L, "Preparando");
-        service.cambiarEstado(1L, "Despachado");
+        service.cambiarEstado(1L, "En ruta");
         Venta r = service.cambiarEstado(1L, "Entregado");
 
         assertEquals("Entregado", r.getEstado());
+    }
+
+    private Venta ventaDeRecojo(String estado) {
+        Venta v = ventaEnEstado(estado);
+        v.setTipoEntrega("RECOJO");
+        return v;
+    }
+
+    @Test
+    void elRecojoSigueSuPropioFlujoSinPasarPorEnRuta() {
+        Venta v = ventaDeRecojo("Preparando");
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
+
+        assertThrows(ResponseStatusException.class, () -> service.cambiarEstado(1L, "En ruta"));
+        assertEquals("Listo para recoger", service.cambiarEstado(1L, "Listo para recoger").getEstado());
+        assertEquals("Entregado", service.cambiarEstado(1L, "Entregado").getEstado());
+    }
+
+    @Test
+    void unPedidoADomicilioNoPasaPorListoParaRecoger() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Preparando")));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service.cambiarEstado(1L, "Listo para recoger"));
+
+        assertEquals("Desde Preparando solo se puede pasar a En ruta", ex.getReason());
+    }
+
+    @Test
+    void unPedidoConElNombreAnteriorDespachadoSeTrataComoEnRuta() {
+        Venta v = ventaEnEstado("Despachado");
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
+
+        assertEquals("Entregado", service.cambiarEstado(1L, "Entregado").getEstado());
+    }
+
+    @Test
+    void cambiarEstadoRegistraEnElHistorialQuienLoHizoYLaNota() {
+        Venta v = ventaEnEstado("Pagado");
+        Usuario despachador = new Usuario();
+        despachador.setNombre("Luis");
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
+        when(usuarioRepository.findByEmail("luis@x.com")).thenReturn(Optional.of(despachador));
+
+        service.cambiarEstado(1L, "Preparando", "  Embalado con cuidado  ", "luis@x.com");
+
+        ArgumentCaptor<EnvioEvento> evento = ArgumentCaptor.forClass(EnvioEvento.class);
+        verify(envioEventoRepository).save(evento.capture());
+        assertEquals("Preparando", evento.getValue().getEstado());
+        assertSame(despachador, evento.getValue().getUsuario());
+        assertEquals("Embalado con cuidado", evento.getValue().getNota());
+        assertSame(v, evento.getValue().getVenta());
+    }
+
+    @Test
+    void cambiarEstadoSinNotaNiUsuarioDejaElEventoSinEsosDatos() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.cambiarEstado(1L, "Preparando", "   ", null);
+
+        ArgumentCaptor<EnvioEvento> evento = ArgumentCaptor.forClass(EnvioEvento.class);
+        verify(envioEventoRepository).save(evento.capture());
+        assertNull(evento.getValue().getNota());
+        assertNull(evento.getValue().getUsuario());
+        verifyNoInteractions(usuarioRepository);
+    }
+
+    @Test
+    void unCambioInvalidoNoRegistraEventos() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
+
+        assertThrows(ResponseStatusException.class, () -> service.cambiarEstado(1L, "Entregado", null, null));
+
+        verifyNoInteractions(envioEventoRepository);
+    }
+
+    @Test
+    void alEntregarSeGuardaLaFechaRealDeEntrega() {
+        Venta v = ventaEnEstado("En ruta");
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(i -> i.getArgument(0));
+
+        Venta r = service.cambiarEstado(1L, "Entregado");
+
+        assertNotNull(r.getFechaEntregaReal());
+    }
+
+    @Test
+    void siguienteEstadoDependeDelTipoDeEntrega() {
+        assertEquals("En ruta", VentaService.siguienteEstado("DOMICILIO", "Preparando"));
+        assertEquals("Listo para recoger", VentaService.siguienteEstado("RECOJO", "Preparando"));
+        assertEquals("Entregado", VentaService.siguienteEstado("DOMICILIO", "Despachado"));
+        assertNull(VentaService.siguienteEstado("DOMICILIO", "Entregado"));
+        assertNull(VentaService.siguienteEstado("DOMICILIO", "ANULADA"));
+    }
+
+    @Test
+    void listarEventosDeUnPedidoInexistenteLanzaNotFound() {
+        when(ventaRepository.existsById(9L)).thenReturn(false);
+
+        assertThrows(ResourceNotFoundException.class, () -> service.listarEventos(9L));
+    }
+
+    @Test
+    void elClienteVeElHistorialDeSuPedido() {
+        Usuario ana = new Usuario();
+        ana.setEmail("ana@x.com");
+        Venta v = ventaEnEstado("Pagado");
+        v.setUsuario(ana);
+        EnvioEvento e = new EnvioEvento();
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+        when(envioEventoRepository.findHistorial(1L)).thenReturn(List.of(e));
+
+        assertEquals(List.of(e), service.listarEventosDelCliente(1L, "ANA@x.com"));
+    }
+
+    @Test
+    void elClienteNoPuedeVerElHistorialDePedidosAjenos() {
+        Usuario otra = new Usuario();
+        otra.setEmail("otra@x.com");
+        Venta v = ventaEnEstado("Pagado");
+        v.setUsuario(otra);
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(v));
+
+        assertThrows(ResourceNotFoundException.class, () -> service.listarEventosDelCliente(1L, "ana@x.com"));
+        verifyNoInteractions(envioEventoRepository);
+    }
+
+    @Test
+    void procesarVentaRegistraElEventoPagado() {
+        Producto mouse = producto(1, "Mouse", 100.0, 10);
+        when(ventaRepository.findByNumeroOrden("MT-ABC1234")).thenReturn(Optional.empty());
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(mouse));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.procesarVenta(List.of(item(1, 1)), new Usuario(), "MT-ABC1234");
+
+        ArgumentCaptor<EnvioEvento> evento = ArgumentCaptor.forClass(EnvioEvento.class);
+        verify(envioEventoRepository).save(evento.capture());
+        assertEquals("Pagado", evento.getValue().getEstado());
+        assertNull(evento.getValue().getUsuario());
     }
 
     @Test
@@ -237,7 +432,7 @@ class VentaServiceTest {
         when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> service.cambiarEstado(1L, "Despachado"));
+                () -> service.cambiarEstado(1L, "En ruta"));
 
         assertEquals(400, ex.getStatusCode().value());
         assertEquals("Desde Pagado solo se puede pasar a Preparando", ex.getReason());
@@ -246,13 +441,13 @@ class VentaServiceTest {
 
     @Test
     void cambiarEstadoRetrocediendoDevuelve400() {
-        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Despachado")));
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("En ruta")));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> service.cambiarEstado(1L, "Preparando"));
 
         assertEquals(400, ex.getStatusCode().value());
-        assertEquals("Desde Despachado solo se puede pasar a Entregado", ex.getReason());
+        assertEquals("Desde En ruta solo se puede pasar a Entregado", ex.getReason());
     }
 
     @Test
@@ -282,5 +477,23 @@ class VentaServiceTest {
 
         assertEquals(400, ex.getStatusCode().value());
         assertTrue(ex.getReason().contains("ANULADA"));
+    }
+
+    @Test
+    void noSeAvanzaUnPedidoConReembolsoPendiente() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
+        when(solicitudReembolsoRepository.existsByVentaIdAndEstado(1L, "PENDIENTE")).thenReturn(true);
+
+        assertThrows(utp.mastertech.mastertech.exception.ConflictException.class,
+                () -> service.cambiarEstado(1L, "Preparando"));
+        verify(ventaRepository, never()).save(any(Venta.class));
+    }
+
+    @Test
+    void procesarVentaGuardaElPagoDeStripeParaPoderReembolsar() {
+        Producto p = producto(1, "Mouse", 10.0, 5);
+        Venta v = service.procesarVenta(List.of(item(1L, 1)), new Usuario(), "ORD-X", null, "pi_123");
+
+        assertEquals("pi_123", v.getStripePaymentIntentId());
     }
 }

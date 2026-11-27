@@ -26,6 +26,7 @@ public class VentaMapper {
         dto.setCantidadItems(venta.getCantidadItems());
         dto.setNumeroOrden(venta.getNumeroOrden());
         dto.setEstado(estadoVisible(venta.getEstado()));
+        dto.setSiguienteEstado(VentaService.siguienteEstado(venta.getTipoEntrega(), venta.getEstado()));
 
         if (venta.getUsuario() != null) {
             dto.setUsuarioId(venta.getUsuario().getId());
@@ -33,6 +34,23 @@ public class VentaMapper {
             dto.setUsuarioEmail(venta.getUsuario().getEmail());
             dto.setUsuarioDireccion(venta.getUsuario().getDireccion());
             dto.setUsuarioTelefono(venta.getUsuario().getNumeroTelefono());
+        }
+
+        dto.setTipoEntrega(venta.getTipoEntrega());
+        dto.setCostoEnvio(venta.getCostoEnvio());
+        // Solo la dirección que el cliente eligió al pagar. La del perfil va aparte (usuarioDireccion): mezclarlas
+        // hacía parecer que el pedido iba a la dirección del perfil cuando no se guardó ninguna.
+        dto.setDireccionEntrega(venta.getDireccionEntrega());
+        dto.setLatitudEntrega(venta.getLatitudEntrega());
+        dto.setLongitudEntrega(venta.getLongitudEntrega());
+        dto.setDistanciaKm(venta.getDistanciaKm());
+        dto.setFechaEstimadaEntrega(venta.getFechaEstimadaEntrega());
+        dto.setFechaEntregaReal(venta.getFechaEntregaReal());
+        dto.setFechaAnulacion(venta.getFechaAnulacion());
+        dto.setMotivoAnulacion(venta.getMotivoAnulacion());
+        if (venta.getPuntoReparto() != null) {
+            dto.setPuntoRepartoId(venta.getPuntoReparto().getId());
+            dto.setPuntoRepartoNombre(venta.getPuntoReparto().getNombre());
         }
 
         // Mapear los detalles usando DetalleVentaMapper
@@ -48,7 +66,9 @@ public class VentaMapper {
 
         return dto;
     }
+    /** Estados del flujo y ANULADA se muestran tal cual; lo anterior a los envíos (p. ej. COMPLETADA) se ve como Pagado. */
     private String estadoVisible(String estado) {
-        return VentaService.FLUJO_DESPACHO.contains(estado) ? estado : "Pagado";
+        String e = VentaService.normalizarEstado(estado);
+        return VentaService.FLUJO_DESPACHO.contains(e) || VentaService.ANULADA.equals(e) ? e : "Pagado";
     }
 }
