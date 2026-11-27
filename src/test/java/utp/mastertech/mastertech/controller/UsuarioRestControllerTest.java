@@ -348,6 +348,19 @@ class UsuarioRestControllerTest {
     }
 
     @Test
+    void eliminarUsuarioConVentasDevuelve409ConMotivoDeTrazabilidad() throws Exception {
+        Usuario ana = usuario(2L, "ana@x.com", "USER");
+        when(usuarioRepository.findById(2L)).thenReturn(Optional.of(ana));
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("fk",
+                new RuntimeException("violates foreign key constraint \"fk_ventas_usuario\"")))
+                .when(usuarioRepository).delete(ana);
+
+        mvc.perform(delete("/api/v1/usuarios/2").principal(admin))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("trazabilidad")));
+    }
+
+    @Test
     void eliminarTuPropiaCuentaDevuelve409() throws Exception {
         when(usuarioRepository.findById(1L)).thenReturn(Optional.of(usuario(1L, "Admin@X.com", "ADMIN")));
 

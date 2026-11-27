@@ -80,6 +80,28 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
+    void llaveForaneaDevuelve409ConMensajeDeTrazabilidad() {
+        DataIntegrityViolationException ex = new DataIntegrityViolationException("x",
+                new RuntimeException("update or delete on table \"usuarios\" violates foreign key constraint \"fk_ventas_usuario\""));
+
+        ResponseEntity<ErrorResponse> r = handler.handleIntegrity(ex, request);
+
+        assertEquals(HttpStatus.CONFLICT, r.getStatusCode());
+        assertTrue(r.getBody().getMessage().contains("trazabilidad"));
+        assertFalse(r.getBody().getMessage().contains("DNI"));
+    }
+
+    @Test
+    void duplicadoDevuelve409ConMensajeDeDatosRepetidos() {
+        DataIntegrityViolationException ex = new DataIntegrityViolationException("x",
+                new RuntimeException("duplicate key value violates unique constraint \"usuarios_email_key\""));
+
+        ResponseEntity<ErrorResponse> r = handler.handleIntegrity(ex, request);
+
+        assertTrue(r.getBody().getMessage().contains("Ya existe un registro"));
+    }
+
+    @Test
     void imagenMuyGrandeDevuelve413() {
         ResponseEntity<ErrorResponse> r = handler.handleMaxUpload(request);
 
