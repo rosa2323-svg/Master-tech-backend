@@ -66,8 +66,9 @@ class PedidoRestControllerTest {
     }
 
     @Test
-    void checkoutDevuelveLaUrlDeStripe() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("DOMICILIO"), any(EntregaRequest.class), isNull())).thenReturn("https://stripe.test/pay/abc");
+    void checkoutDevuelveLosDatosParaMontarElPagoIncrustado() throws Exception {
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("DOMICILIO"), any(EntregaRequest.class), isNull()))
+                .thenReturn(new utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO("cs_secret_abc", "pk_test_1", 1790000000L));
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
@@ -76,7 +77,9 @@ class PedidoRestControllerTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertTrue(cuerpo.contains("https://stripe.test/pay/abc"));
+        assertTrue(cuerpo.contains("\"clientSecret\":\"cs_secret_abc\""));
+        assertTrue(cuerpo.contains("\"publishableKey\":\"pk_test_1\""));
+        assertTrue(cuerpo.contains("\"expiraEn\":1790000000"));
     }
 
     @Test
@@ -170,7 +173,7 @@ class PedidoRestControllerTest {
     @Test
     void checkoutParaRecojoNoNecesitaDireccion() throws Exception {
         when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("RECOJO"), isNull(), eq(3L)))
-                .thenReturn("https://stripe.test/pay/recojo");
+                .thenReturn(new utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO("cs_secret_recojo", "pk_test_1", 1790000000L));
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
@@ -179,7 +182,7 @@ class PedidoRestControllerTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertTrue(cuerpo.contains("https://stripe.test/pay/recojo"));
+        assertTrue(cuerpo.contains("\"clientSecret\":\"cs_secret_recojo\""));
     }
 
     @Test

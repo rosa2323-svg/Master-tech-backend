@@ -5,11 +5,13 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import utp.mastertech.mastertech.exception.ErrorJson;
 
 import java.io.IOException;
 import java.util.List;
@@ -41,9 +43,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = authHeader.substring(7);
 
         if (!jwtUtil.validarToken(token)) {
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"error\": \"Token JWT inválido o expirado\"}");
+            ErrorJson.escribir(request, response, HttpStatus.UNAUTHORIZED, "Token JWT inválido o expirado");
             return;
         }
 

@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO;
 import utp.mastertech.mastertech.dto.CheckoutRequest;
 import utp.mastertech.mastertech.dto.ConfirmarPagoRequest;
 import utp.mastertech.mastertech.dto.CotizacionDTO;
@@ -15,7 +16,6 @@ import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.service.PedidoService;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/pedidos")
@@ -43,13 +43,12 @@ public class PedidoRestController {
                 request.getLongitud(), request.getPuntoRepartoId());
     }
 
-    /** Crea la sesión de Stripe Checkout y devuelve su URL. */
+    /** Crea la sesión de Stripe Checkout incrustado y devuelve lo necesario para montarla en el front. */
     @PostMapping("/checkout")
-    public Map<String, String> checkout(@Valid @RequestBody CheckoutRequest request,
+    public CheckoutEmbebidoDTO checkout(@Valid @RequestBody CheckoutRequest request,
                                         Authentication authentication) {
-        String url = pedidoService.crearCheckout(authentication.getName(), request.getItems(),
+        return pedidoService.crearCheckout(authentication.getName(), request.getItems(),
                 request.getTipoEntrega(), request.getEntrega(), request.getPuntoRepartoId());
-        return Map.of("url", url);
     }
 
     /** Se llama al volver de Stripe: verifica el pago y registra la venta. */

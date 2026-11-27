@@ -62,6 +62,9 @@ class JwtAuthenticationFilterTest {
 
         assertEquals(401, response.getStatus());
         assertTrue(response.getContentAsString().contains("inválido o expirado"));
+        assertTrue(response.getContentAsString().contains("\"status\":401"));
+        assertTrue(response.getContentAsString().contains("\"path\":\"/api/v1/me\""));
+        assertTrue(response.getContentType().startsWith("application/json"));
         verifyNoInteractions(chain);
     }
 

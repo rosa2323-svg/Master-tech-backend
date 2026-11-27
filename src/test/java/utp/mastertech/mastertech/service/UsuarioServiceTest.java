@@ -67,7 +67,8 @@ class UsuarioServiceTest {
     void obtenerPorEmailFallaSiNoExiste() {
         when(usuarioRepository.findByEmail("no@x.com")).thenReturn(Optional.empty());
 
-        assertThrows(RuntimeException.class, () -> service.obtenerPorEmail("no@x.com"));
+        assertThrows(utp.mastertech.mastertech.exception.ResourceNotFoundException.class,
+                () -> service.obtenerPorEmail("no@x.com"));
     }
 
     @Test
