@@ -1,5 +1,7 @@
 package utp.mastertech.mastertech.controller;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -14,6 +16,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/stripe")
 public class StripeWebhookController {
+
+    private static final Logger log = LoggerFactory.getLogger(StripeWebhookController.class);
 
     @Autowired
     private StripeWebhookService webhookService;
@@ -30,6 +34,7 @@ public class StripeWebhookController {
         try {
             webhookService.procesar(payload, firma);
         } catch (StripeWebhookService.FirmaInvalidaException e) {
+            log.warn("Webhook de Stripe rechazado: firma inválida");
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
         return ResponseEntity.ok(Map.of("recibido", "true"));

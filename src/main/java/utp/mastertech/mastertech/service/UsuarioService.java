@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.repository.UsuarioRepository;
@@ -46,7 +47,7 @@ public class UsuarioService {
 
     public Usuario obtenerPorEmail(String email) {
         return usuarioRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Usuario no encontrado: " + email));
+                .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado"));
     }
 
     @Transactional

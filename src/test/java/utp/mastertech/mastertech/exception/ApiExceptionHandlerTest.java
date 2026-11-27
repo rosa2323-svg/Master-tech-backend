@@ -8,10 +8,25 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpInputMessage;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import java.util.Set;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class ApiExceptionHandlerTest {
 
@@ -116,5 +131,110 @@ class ApiExceptionHandlerTest {
 
         assertEquals(HttpStatus.FORBIDDEN, r.getStatusCode());
         assertEquals("Forbidden", r.getBody().getMessage());
+    }
+
+    @Test
+    void validacionDevuelve400ConMensajeYErroresPorCampo() {
+        BeanPropertyBindingResult binding = new BeanPropertyBindingResult(new Object(), "dto");
+        binding.addError(new FieldError("dto", "email", "El correo no es válido"));
+        binding.addError(new FieldError("dto", "nombre", "El nombre es obligatorio"));
+        binding.addError(new FieldError("dto", "email", "El correo es obligatorio"));
+        MethodArgumentNotValidException ex = mock(MethodArgumentNotValidException.class);
+        when(ex.getBindingResult()).thenReturn(binding);
+
+        ResponseEntity<ErrorResponse> r = handler.handleValidation(ex, request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, r.getStatusCode());
+        assertEquals("El correo no es válido. El nombre es obligatorio. El correo es obligatorio", r.getBody().getMessage());
+        assertEquals(2, r.getBody().getFieldErrors().size());
+        assertEquals("El correo no es válido", r.getBody().getFieldErrors().get("email"));
+    }
+
+    @Test
+    void validacionSinMensajesUsaUnTextoPorDefecto() {
+        MethodArgumentNotValidException ex = mock(MethodArgumentNotValidException.class);
+        when(ex.getBindingResult()).thenReturn(new BeanPropertyBindingResult(new Object(), "dto"));
+
+        ResponseEntity<ErrorResponse> r = handler.handleValidation(ex, request);
+
+        assertEquals("Hay datos inválidos en el formulario", r.getBody().getMessage());
+        assertNull(r.getBody().getFieldErrors());
+    }
+
+    @Test
+    void cuerpoIlegibleDevuelve400SinFiltrarElDetalleDeJackson() {
+        HttpMessageNotReadableException ex = new HttpMessageNotReadableException(
+                "JSON parse error: Unexpected character", new RuntimeException("detalle interno"), mock(HttpInputMessage.class));
+
+        ResponseEntity<ErrorResponse> r = handler.handleBodyIlegible(ex, request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, r.getStatusCode());
+        assertFalse(r.getBody().getMessage().contains("Jackson"));
+        assertFalse(r.getBody().getMessage().contains("detalle interno"));
+    }
+
+    @Test
+    void parametroConTipoIncorrectoDevuelve400ConElNombreDelParametro() {
+        MethodArgumentTypeMismatchException ex = mock(MethodArgumentTypeMismatchException.class);
+        when(ex.getName()).thenReturn("id");
+
+        ResponseEntity<ErrorResponse> r = handler.handleTipoIncorrecto(ex, request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, r.getStatusCode());
+        assertTrue(r.getBody().getMessage().contains("'id'"));
+    }
+
+    @Test
+    void violacionDeRestriccionDevuelve400() {
+        ConstraintViolation<?> v = mock(ConstraintViolation.class);
+        when(v.getMessage()).thenReturn("debe ser mayor que 0");
+
+        ResponseEntity<ErrorResponse> r = handler.handleConstraint(new ConstraintViolationException(Set.of(v)), request);
+
+        assertEquals(HttpStatus.BAD_REQUEST, r.getStatusCode());
+        assertEquals("debe ser mayor que 0", r.getBody().getMessage());
+    }
+
+    @Test
+    void edicionConcurrenteDevuelve409() {
+        ResponseEntity<ErrorResponse> r = handler.handleBloqueoOptimista(
+                new ObjectOptimisticLockingFailureException(Object.class, 1L), request);
+
+        assertEquals(HttpStatus.CONFLICT, r.getStatusCode());
+        assertTrue(r.getBody().getMessage().contains("modificó"));
+    }
+
+    @Test
+    void tipoDeContenidoNoSoportadoDevuelve415() {
+        ResponseEntity<ErrorResponse> r = handler.handleMediaType(request);
+
+        assertEquals(HttpStatus.UNSUPPORTED_MEDIA_TYPE, r.getStatusCode());
+    }
+
+    @Test
+    void excepcionesDeSeguridadNoSeConviertenEn500() {
+        ResponseEntity<ErrorResponse> sinPermiso = handler.handleSinPermiso(request);
+        ResponseEntity<ErrorResponse> sinSesion = handler.handleNoAutenticado(request);
+
+        assertEquals(HttpStatus.FORBIDDEN, sinPermiso.getStatusCode());
+        assertEquals(HttpStatus.UNAUTHORIZED, sinSesion.getStatusCode());
+        assertEquals("No tienes permisos para esta acción", sinPermiso.getBody().getMessage());
+    }
+
+    @Test
+    void errorInesperadoIncluyeUnaReferenciaParaBuscarloEnLosLogs() {
+        ResponseEntity<ErrorResponse> r = handler.handleGlobal(new RuntimeException("boom"), request);
+
+        assertNotNull(r.getBody().getReferencia());
+        assertEquals(8, r.getBody().getReferencia().length());
+        assertFalse(r.getBody().getMessage().contains(r.getBody().getReferencia()));
+    }
+
+    @Test
+    void errorInesperadoGeneraReferenciasDistintas() {
+        String a = handler.handleGlobal(new RuntimeException("a"), request).getBody().getReferencia();
+        String b = handler.handleGlobal(new RuntimeException("b"), request).getBody().getReferencia();
+
+        assertNotEquals(a, b);
     }
 }

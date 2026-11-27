@@ -23,7 +23,7 @@ public class StripeReembolsoClient {
             RequestOptions opciones = RequestOptions.builder().setIdempotencyKey(claveIdempotencia).build();
             return Refund.create(params, opciones).getId();
         } catch (StripeException e) {
-            throw new PagoException("No se pudo reembolsar el pago en Stripe: " + e.getMessage(), e);
+            throw new PagoException("No se pudo reembolsar el pago en la pasarela. Inténtalo de nuevo.", e);
         }
     }
 }

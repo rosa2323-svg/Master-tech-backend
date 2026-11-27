@@ -1,11 +1,11 @@
 package utp.mastertech.mastertech.config;
 
-import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -15,6 +15,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import utp.mastertech.mastertech.exception.ErrorJson;
 import utp.mastertech.mastertech.security.JwtAuthenticationFilter;
 
 import java.util.Arrays;
@@ -69,16 +70,10 @@ public class SecurityConfig {
                         .anyRequest().denyAll()
                 )
                 .exceptionHandling(e -> e
-                        .authenticationEntryPoint((req, res, ex) -> {
-                            res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                            res.setContentType("application/json;charset=UTF-8");
-                            res.getWriter().write("{\"error\": \"Debes iniciar sesión\"}");
-                        })
-                        .accessDeniedHandler((req, res, ex) -> {
-                            res.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                            res.setContentType("application/json;charset=UTF-8");
-                            res.getWriter().write("{\"error\": \"No tienes permisos para esta acción\"}");
-                        })
+                        .authenticationEntryPoint((req, res, ex) ->
+                                ErrorJson.escribir(req, res, HttpStatus.UNAUTHORIZED, "Debes iniciar sesión"))
+                        .accessDeniedHandler((req, res, ex) ->
+                                ErrorJson.escribir(req, res, HttpStatus.FORBIDDEN, "No tienes permisos para esta acción"))
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

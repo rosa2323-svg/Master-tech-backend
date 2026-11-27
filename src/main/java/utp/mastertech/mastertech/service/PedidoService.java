@@ -172,7 +172,8 @@ public class PedidoService {
         }
 
         if (stripePublishableKey == null || stripePublishableKey.isBlank()) {
-            throw new PagoException("Falta configurar la clave pública de Stripe (STRIPE_PUBLISHABLE_KEY).", null);
+            log.error("Falta configurar STRIPE_PUBLISHABLE_KEY: no se puede crear el pago");
+            throw new PagoException("El pago en línea no está disponible por el momento. Inténtalo más tarde.", null);
         }
 
         String base = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
@@ -193,7 +194,7 @@ public class PedidoService {
             Session session = Session.create(params);
             return new CheckoutEmbebidoDTO(session.getClientSecret(), stripePublishableKey, expiraEn);
         } catch (StripeException e) {
-            throw new PagoException("Error al conectar con Stripe: " + e.getMessage(), e);
+            throw new PagoException("No se pudo conectar con la pasarela de pago. Inténtalo de nuevo en unos minutos.", e);
         }
     }
 
