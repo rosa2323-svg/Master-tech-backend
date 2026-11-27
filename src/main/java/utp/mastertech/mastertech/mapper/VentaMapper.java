@@ -26,6 +26,7 @@ public class VentaMapper {
         dto.setCantidadItems(venta.getCantidadItems());
         dto.setNumeroOrden(venta.getNumeroOrden());
         dto.setEstado(estadoVisible(venta.getEstado()));
+        dto.setSiguienteEstado(VentaService.siguienteEstado(venta.getTipoEntrega(), venta.getEstado()));
 
         if (venta.getUsuario() != null) {
             dto.setUsuarioId(venta.getUsuario().getId());
@@ -66,7 +67,9 @@ public class VentaMapper {
 
         return dto;
     }
+    /** Estados del flujo y ANULADA se muestran tal cual; lo anterior a los envíos (p. ej. COMPLETADA) se ve como Pagado. */
     private String estadoVisible(String estado) {
-        return VentaService.FLUJO_DESPACHO.contains(estado) ? estado : "Pagado";
+        String e = VentaService.normalizarEstado(estado);
+        return VentaService.FLUJO_DESPACHO.contains(e) || VentaService.ANULADA.equals(e) ? e : "Pagado";
     }
 }

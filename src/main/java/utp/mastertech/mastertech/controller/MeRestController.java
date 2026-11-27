@@ -6,12 +6,15 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import utp.mastertech.mastertech.dto.CambiarPasswordRequest;
+import utp.mastertech.mastertech.dto.EnvioEventoDTO;
 import utp.mastertech.mastertech.dto.PerfilDTO;
 import utp.mastertech.mastertech.dto.PerfilUpdateRequest;
 import utp.mastertech.mastertech.dto.VentaDTO;
+import utp.mastertech.mastertech.mapper.EnvioMapper;
 import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.service.UsuarioService;
+import utp.mastertech.mastertech.service.VentaService;
 
 import java.util.List;
 import java.util.Map;
@@ -27,6 +30,12 @@ public class MeRestController {
 
     @Autowired
     private VentaMapper ventaMapper;
+
+    @Autowired
+    private EnvioMapper envioMapper;
+
+    @Autowired
+    private VentaService ventaService;
 
     @GetMapping
     public PerfilDTO verPerfil(Authentication auth) {
@@ -56,6 +65,14 @@ public class MeRestController {
         Usuario usuario = usuarioService.obtenerPorEmail(auth.getName());
         return usuarioService.obtenerHistorialCompras(usuario).stream()
                 .map(ventaMapper::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    /** Seguimiento de un pedido propio: por qué estados pasó y cuándo. */
+    @GetMapping("/pedidos/{id}/seguimiento")
+    public List<EnvioEventoDTO> seguimiento(@PathVariable Long id, Authentication auth) {
+        return ventaService.listarEventosDelCliente(id, auth.getName()).stream()
+                .map(envioMapper::toDTO)
                 .collect(Collectors.toList());
     }
 

@@ -5,6 +5,8 @@ import utp.mastertech.mastertech.dto.ConfigEnvioDTO;
 import utp.mastertech.mastertech.dto.DiaNoLaborableDTO;
 import utp.mastertech.mastertech.dto.PuntoRepartoDTO;
 import utp.mastertech.mastertech.dto.TarifaEnvioDTO;
+import utp.mastertech.mastertech.dto.EnvioEventoDTO;
+import utp.mastertech.mastertech.model.EnvioEvento;
 import utp.mastertech.mastertech.model.ConfigEnvio;
 import utp.mastertech.mastertech.model.DiaNoLaborable;
 import utp.mastertech.mastertech.model.PuntoReparto;
@@ -117,5 +119,10 @@ public class EnvioMapper {
         dto.setFecha(dia.getFecha());
         dto.setDescripcion(dia.getDescripcion());
         return dto;
+    }
+
+    public EnvioEventoDTO toDTO(EnvioEvento evento) {
+        return new EnvioEventoDTO(evento.getEstado(), evento.getFecha(),
+                evento.getUsuario() != null ? evento.getUsuario().getNombre() : null, evento.getNota());
     }
 }

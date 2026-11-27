@@ -1,9 +1,13 @@
 package utp.mastertech.mastertech.controller;
 
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import utp.mastertech.mastertech.dto.CambioEstadoDTO;
+import utp.mastertech.mastertech.dto.EnvioEventoDTO;
 import utp.mastertech.mastertech.dto.VentaDTO;
+import utp.mastertech.mastertech.mapper.EnvioMapper;
 import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.service.VentaService;
 
@@ -21,6 +25,9 @@ public class DespachoController {
     @Autowired
     private VentaMapper ventaMapper;
 
+    @Autowired
+    private EnvioMapper envioMapper;
+
     @GetMapping("/pedidos")
     public List<VentaDTO> listar() {
         return ventaService.listarParaDespacho().stream()
@@ -28,8 +35,16 @@ public class DespachoController {
                 .collect(Collectors.toList());
     }
 
+    /** Avanza el pedido al siguiente estado de su flujo y deja constancia de quién lo hizo. */
     @PatchMapping("/pedidos/{id}/estado")
-    public VentaDTO cambiarEstado(@PathVariable Long id, @RequestBody CambioEstadoDTO body) {
-        return ventaMapper.toDTO(ventaService.cambiarEstado(id, body.getEstado()));
+    public VentaDTO cambiarEstado(@PathVariable Long id, @Valid @RequestBody CambioEstadoDTO body,
+                                  Authentication auth) {
+        return ventaMapper.toDTO(ventaService.cambiarEstado(id, body.getEstado(), body.getNota(),
+                auth == null ? null : auth.getName()));
+    }
+
+    @GetMapping("/pedidos/{id}/eventos")
+    public List<EnvioEventoDTO> eventos(@PathVariable Long id) {
+        return ventaService.listarEventos(id).stream().map(envioMapper::toDTO).collect(Collectors.toList());
     }
 }

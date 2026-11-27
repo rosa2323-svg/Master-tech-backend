@@ -22,6 +22,9 @@ public class VentaDTO {
 
     private String estado;
 
+    /** Próximo estado del flujo de despacho; null si ya terminó o no está en el flujo. */
+    private String siguienteEstado;
+
     private Long usuarioId;
 
     private String usuarioNombre;

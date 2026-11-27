@@ -9,11 +9,14 @@ import utp.mastertech.mastertech.dto.ItemPedidoDTO;
 import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.exception.StockInsuficienteException;
 import utp.mastertech.mastertech.model.DetalleVenta;
+import utp.mastertech.mastertech.model.EnvioEvento;
 import utp.mastertech.mastertech.model.Producto;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.repository.DetalleVentaRepository;
+import utp.mastertech.mastertech.repository.EnvioEventoRepository;
 import utp.mastertech.mastertech.repository.ProductoRepository;
+import utp.mastertech.mastertech.repository.UsuarioRepository;
 import utp.mastertech.mastertech.repository.VentaRepository;
 
 import java.math.BigDecimal;
@@ -38,8 +41,41 @@ public class VentaService {
     @Autowired
     private ProductoRepository productoRepository;
 
+    @Autowired
+    private EnvioEventoRepository envioEventoRepository;
+
+    @Autowired
+    private UsuarioRepository usuarioRepository;
+
+    public static final String EN_RUTA = "En ruta";
+    public static final String ENTREGADO = "Entregado";
+    public static final String ANULADA = "ANULADA";
+
+    /** A domicilio: Pagado → Preparando → En ruta → Entregado. */
+    public static final List<String> FLUJO_DOMICILIO = List.of("Pagado", "Preparando", EN_RUTA, ENTREGADO);
+
+    /** Recojo en tienda: Pagado → Preparando → Listo para recoger → Entregado. */
+    public static final List<String> FLUJO_RECOJO = List.of("Pagado", "Preparando", "Listo para recoger", ENTREGADO);
+
+    /** Todos los estados que aparecen en el panel de despacho. */
     public static final List<String> FLUJO_DESPACHO =
-            List.of("Pagado", "Preparando", "Despachado", "Entregado");
+            List.of("Pagado", "Preparando", EN_RUTA, "Listo para recoger", ENTREGADO);
+
+    /** "Despachado" es el nombre anterior de "En ruta" (por si quedara algún pedido sin migrar). */
+    public static String normalizarEstado(String estado) {
+        return "Despachado".equals(estado) ? EN_RUTA : estado;
+    }
+
+    public static List<String> flujoDe(String tipoEntrega) {
+        return "RECOJO".equals(tipoEntrega) ? FLUJO_RECOJO : FLUJO_DOMICILIO;
+    }
+
+    /** Estado al que puede pasar un pedido, o null si terminó o no está en el flujo. */
+    public static String siguienteEstado(String tipoEntrega, String estado) {
+        List<String> flujo = flujoDe(tipoEntrega);
+        int pos = flujo.indexOf(normalizarEstado(estado));
+        return pos >= 0 && pos + 1 < flujo.size() ? flujo.get(pos + 1) : null;
+    }
 
     /** Une líneas repetidas del mismo producto sumando cantidades (conserva el orden). */
     public List<ItemPedidoDTO> consolidar(List<ItemPedidoDTO> items) {
@@ -152,7 +188,9 @@ public class VentaService {
             venta.setPuntoReparto(entrega.sede());
             venta.setFechaEstimadaEntrega(entrega.fechaEstimada());
         }
-        return ventaRepository.save(venta);
+        Venta guardada = ventaRepository.save(venta);
+        registrarEvento(guardada, "Pagado", null, "Pago confirmado");
+        return guardada;
     }
 
     public List<Venta> listarVentas() {
@@ -175,28 +213,74 @@ public class VentaService {
         return ventaRepository.findByEstadoInOrderByIdDesc(FLUJO_DESPACHO);
     }
 
-    @Transactional
     public Venta cambiarEstado(Long id, String nuevoEstado) {
+        return cambiarEstado(id, nuevoEstado, null, null);
+    }
+
+    /**
+     * Avanza un pedido al siguiente estado de su flujo (domicilio o recojo) y lo anota en el historial.
+     *
+     * @param nota  comentario opcional del despachador
+     * @param email quién lo hizo (null = sistema)
+     */
+    @Transactional
+    public Venta cambiarEstado(Long id, String nuevoEstado, String nota, String email) {
         Venta venta = ventaRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Venta no encontrada: " + id));
 
-        int actual = FLUJO_DESPACHO.indexOf(venta.getEstado());
-        int destino = FLUJO_DESPACHO.indexOf(nuevoEstado);
+        List<String> flujo = flujoDe(venta.getTipoEntrega());
+        String estadoActual = normalizarEstado(venta.getEstado());
+        int actual = flujo.indexOf(estadoActual);
+        int destino = flujo.indexOf(nuevoEstado);
 
         if (actual < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Este pedido no está en el flujo de despacho (estado actual: " + venta.getEstado() + ")");
         }
         if (destino != actual + 1) {
-            String siguiente = actual + 1 < FLUJO_DESPACHO.size()
-                    ? FLUJO_DESPACHO.get(actual + 1) : null;
+            String siguiente = actual + 1 < flujo.size() ? flujo.get(actual + 1) : null;
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     siguiente == null
                             ? "El pedido ya fue entregado"
-                            : "Desde " + venta.getEstado() + " solo se puede pasar a " + siguiente);
+                            : "Desde " + estadoActual + " solo se puede pasar a " + siguiente);
         }
 
         venta.setEstado(nuevoEstado);
-        return ventaRepository.save(venta);
+        if (ENTREGADO.equals(nuevoEstado)) {
+            venta.setFechaEntregaReal(LocalDateTime.now());
+        }
+        Venta guardada = ventaRepository.save(venta);
+        registrarEvento(guardada, nuevoEstado,
+                email == null ? null : usuarioRepository.findByEmail(email).orElse(null), nota);
+        return guardada;
+    }
+
+    /** Historial de un pedido (vista del despachador). */
+    @Transactional(readOnly = true)
+    public List<EnvioEvento> listarEventos(Long ventaId) {
+        if (!ventaRepository.existsById(ventaId)) {
+            throw new ResourceNotFoundException("Venta no encontrada: " + ventaId);
+        }
+        return envioEventoRepository.findHistorial(ventaId);
+    }
+
+    /** Historial de un pedido propio del cliente; los ajenos responden como inexistentes. */
+    @Transactional(readOnly = true)
+    public List<EnvioEvento> listarEventosDelCliente(Long ventaId, String email) {
+        Venta venta = ventaRepository.findById(ventaId)
+                .orElseThrow(() -> new ResourceNotFoundException("Venta no encontrada: " + ventaId));
+        if (venta.getUsuario() == null || email == null || !email.equalsIgnoreCase(venta.getUsuario().getEmail())) {
+            throw new ResourceNotFoundException("Venta no encontrada: " + ventaId);
+        }
+        return envioEventoRepository.findHistorial(ventaId);
+    }
+
+    private void registrarEvento(Venta venta, String estado, Usuario usuario, String nota) {
+        EnvioEvento evento = new EnvioEvento();
+        evento.setVenta(venta);
+        evento.setEstado(estado);
+        evento.setUsuario(usuario);
+        evento.setNota(nota == null || nota.isBlank() ? null : nota.trim());
+        envioEventoRepository.save(evento);
     }
 }
