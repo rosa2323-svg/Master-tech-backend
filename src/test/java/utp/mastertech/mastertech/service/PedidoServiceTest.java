@@ -124,7 +124,7 @@ class PedidoServiceTest {
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.create(any(SessionCreateParams.class))).thenReturn(sesion);
 
-            assertEquals("https://stripe.test/pay", service.crearCheckout("ana@x.com", items, entrega()));
+            assertEquals("https://stripe.test/pay", service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
 
             stripe.verify(() -> Session.create(params.capture()));
         }
@@ -146,7 +146,7 @@ class PedidoServiceTest {
         when(ventaService.consolidar(items)).thenReturn(items);
         when(ventaService.validarStock(items)).thenReturn(List.of("Solo hay 1 unidades disponibles de \"Mouse\"."));
 
-        assertThrows(StockInsuficienteException.class, () -> service.crearCheckout("ana@x.com", items, entrega()));
+        assertThrows(StockInsuficienteException.class, () -> service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
 
         verifyNoInteractions(productoRepository);
     }
@@ -160,7 +160,7 @@ class PedidoServiceTest {
         when(ventaService.consolidar(muchos)).thenReturn(muchos);
         when(ventaService.validarStock(muchos)).thenReturn(List.of());
 
-        assertThrows(IllegalArgumentException.class, () -> service.crearCheckout("ana@x.com", muchos, entrega()));
+        assertThrows(IllegalArgumentException.class, () -> service.crearCheckout("ana@x.com", muchos, "DOMICILIO", entrega(), null));
     }
 
     @Test
@@ -173,7 +173,7 @@ class PedidoServiceTest {
                 .thenReturn(EnvioCotizacionService.Cotizacion.sinCobertura("Todavía no llegamos a esa dirección."));
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> service.crearCheckout("ana@x.com", items, entrega()));
+                () -> service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
 
         assertEquals("Todavía no llegamos a esa dirección.", ex.getMessage());
     }
@@ -223,7 +223,7 @@ class PedidoServiceTest {
                     return cotizacion("12.00", false, sede(3));
                 });
 
-        CotizacionDTO dto = service.cotizar(items, new BigDecimal("-12.08"), new BigDecimal("-77.03"));
+        CotizacionDTO dto = service.cotizar(items, "DOMICILIO", new BigDecimal("-12.08"), new BigDecimal("-77.03"), null);
 
         assertEquals(0, new BigDecimal("200.00").compareTo(visto[0]));
         assertTrue(dto.isCubierto());
@@ -245,7 +245,7 @@ class PedidoServiceTest {
         when(cotizacionService.cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class)))
                 .thenReturn(EnvioCotizacionService.Cotizacion.sinCobertura("Todavía no llegamos a esa dirección."));
 
-        CotizacionDTO dto = service.cotizar(items, BigDecimal.ONE, BigDecimal.ONE);
+        CotizacionDTO dto = service.cotizar(items, "DOMICILIO", BigDecimal.ONE, BigDecimal.ONE, null);
 
         assertFalse(dto.isCubierto());
         assertEquals("Todavía no llegamos a esa dirección.", dto.getMensaje());
@@ -258,7 +258,123 @@ class PedidoServiceTest {
         when(ventaService.consolidar(items)).thenReturn(items);
         when(productoRepository.findById(9L)).thenReturn(Optional.empty());
 
-        assertThrows(ResourceNotFoundException.class, () -> service.cotizar(items, BigDecimal.ONE, BigDecimal.ONE));
+        assertThrows(ResourceNotFoundException.class, () -> service.cotizar(items, "DOMICILIO", BigDecimal.ONE, BigDecimal.ONE, null));
+    }
+
+    // ---------- recojo en tienda ----------
+
+    private PuntoReparto sedeRecojo(long id, boolean activo, boolean permiteRecojo) {
+        PuntoReparto s = sede(id);
+        s.setDireccion("Av. Huaylas 1200, Chorrillos");
+        s.setLatitud(new BigDecimal("-12.170000"));
+        s.setLongitud(new BigDecimal("-77.010000"));
+        s.setActivo(activo);
+        s.setPermiteRecojo(permiteRecojo);
+        return s;
+    }
+
+    private void carritoConUnProducto() {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(ventaService.validarStock(items)).thenReturn(List.of());
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+    }
+
+    @Test
+    void crearCheckoutParaRecojoNoCobraEnvioNiCotiza() {
+        carritoConUnProducto();
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
+        Session sesion = mock(Session.class);
+        when(sesion.getUrl()).thenReturn("https://stripe.test/pay");
+        ArgumentCaptor<SessionCreateParams> params = ArgumentCaptor.forClass(SessionCreateParams.class);
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.create(any(SessionCreateParams.class))).thenReturn(sesion);
+
+            service.crearCheckout("ana@x.com", List.of(item(1, 2)), "RECOJO", null, 3L);
+
+            stripe.verify(() -> Session.create(params.capture()));
+        }
+
+        assertEquals(1, params.getValue().getLineItems().size(), "solo el producto: el recojo no cobra envío");
+        Map<String, String> m = params.getValue().getMetadata();
+        assertEquals("RECOJO", m.get("tipo"));
+        assertEquals("Av. Huaylas 1200, Chorrillos", m.get("dir"));
+        assertEquals("0.00", m.get("envio"));
+        assertEquals("3", m.get("sede"));
+        assertEquals("0:0", m.get("plazo"));
+        verifyNoInteractions(cotizacionService);
+    }
+
+    @Test
+    void crearCheckoutParaRecojoSinSedeLanzaIllegalArgument() {
+        carritoConUnProducto();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.crearCheckout("ana@x.com", List.of(item(1, 2)), "RECOJO", null, null));
+    }
+
+    @Test
+    void crearCheckoutParaRecojoRechazaSedesInexistentesInactivasOSinRecojo() {
+        carritoConUnProducto();
+        when(puntoRepartoRepository.findById(1L)).thenReturn(Optional.empty());
+        when(puntoRepartoRepository.findById(2L)).thenReturn(Optional.of(sedeRecojo(2, false, true)));
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, false)));
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+
+        for (long id : new long[]{1, 2, 3}) {
+            IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                    () -> service.crearCheckout("ana@x.com", items, "RECOJO", null, id));
+            assertEquals("Ese punto de recojo no está disponible.", ex.getMessage());
+        }
+    }
+
+    @Test
+    void crearCheckoutADomicilioSinDireccionLanzaIllegalArgument() {
+        carritoConUnProducto();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> service.crearCheckout("ana@x.com", List.of(item(1, 2)), "DOMICILIO", null, null));
+        verifyNoInteractions(cotizacionService);
+    }
+
+    @Test
+    void cotizarRecojoEsGratisYListoDesdeLaFechaDePreparacion() {
+        List<ItemPedidoDTO> items = List.of(item(1, 2));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
+        when(cotizacionService.estimarEntrega(eq(0), eq(0), any(Instant.class)))
+                .thenReturn(new EnvioCotizacionService.VentanaEntrega(LocalDate.of(2026, 11, 26), LocalDate.of(2026, 11, 26)));
+
+        CotizacionDTO dto = service.cotizar(items, "RECOJO", null, null, 3L);
+
+        assertTrue(dto.isCubierto());
+        assertEquals("RECOJO", dto.getTipoEntrega());
+        assertEquals(0, BigDecimal.ZERO.compareTo(dto.getCostoEnvio()));
+        assertEquals(0, new BigDecimal("200.00").compareTo(dto.getTotal()));
+        assertTrue(dto.isEnvioGratis());
+        assertEquals("Av. Huaylas 1200, Chorrillos", dto.getSedeDireccion());
+        assertEquals(LocalDate.of(2026, 11, 26), dto.getEntregaDesde());
+        verify(cotizacionService, never()).cotizar(any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), any(Instant.class));
+    }
+
+    @Test
+    void cotizarADomicilioSinUbicacionLanzaIllegalArgument() {
+        List<ItemPedidoDTO> items = List.of(item(1, 1));
+        when(ventaService.consolidar(items)).thenReturn(items);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, 100.0)));
+
+        assertThrows(IllegalArgumentException.class, () -> service.cotizar(items, "DOMICILIO", null, null, null));
+    }
+
+    @Test
+    void puntosRecojoSoloIncluyeSedesActivasQueLoPermiten() {
+        PuntoReparto conRecojo = sedeRecojo(1, true, true);
+        PuntoReparto sinRecojo = sedeRecojo(2, true, false);
+        when(puntoRepartoRepository.findByActivoTrue()).thenReturn(List.of(conRecojo, sinRecojo));
+
+        assertEquals(List.of(conRecojo), service.puntosRecojo());
     }
 
     // ---------- confirmar ----------

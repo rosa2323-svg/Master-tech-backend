@@ -32,6 +32,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -44,6 +45,8 @@ import java.util.Map;
 public class PedidoService {
 
     private static final int MAX_METADATA = 500; // límite de Stripe por valor de metadata
+    private static final String TIPO_DOMICILIO = "DOMICILIO";
+    private static final String TIPO_RECOJO = "RECOJO";
 
     @Autowired
     private VentaService ventaService;
@@ -72,7 +75,8 @@ public class PedidoService {
     }
 
     /** @return URL de Stripe Checkout a la que el front debe redirigir al cliente. */
-    public String crearCheckout(String email, List<ItemPedidoDTO> itemsEntrada, EntregaRequest entrega) {
+    public String crearCheckout(String email, List<ItemPedidoDTO> itemsEntrada, String tipoEntrega,
+                                EntregaRequest entrega, Long puntoRepartoId) {
         List<ItemPedidoDTO> items = ventaService.consolidar(itemsEntrada);
 
         List<String> errores = ventaService.validarStock(items);
@@ -105,22 +109,46 @@ public class PedidoService {
         }
 
         // El costo de envío SIEMPRE se calcula aquí: nunca se acepta un monto enviado por el front.
-        EnvioCotizacionService.Cotizacion cotizacion = cotizacionService.cotizar(
-                subtotal, entrega.getLatitud(), entrega.getLongitud(), Instant.now());
-        if (!cotizacion.cubierto()) {
-            throw new IllegalArgumentException(cotizacion.mensaje());
-        }
-        if (cotizacion.costoEnvio().signum() > 0) {
-            lineItems.add(SessionCreateParams.LineItem.builder()
-                    .setQuantity(1L)
-                    .setPriceData(SessionCreateParams.LineItem.PriceData.builder()
-                            .setCurrency("pen")
-                            .setUnitAmount(aCentimos(cotizacion.costoEnvio()))
-                            .setProductData(SessionCreateParams.LineItem.PriceData.ProductData.builder()
-                                    .setName("Envío a domicilio")
-                                    .build())
-                            .build())
-                    .build());
+        Map<String, String> datosEntrega = new LinkedHashMap<>();
+        if (TIPO_RECOJO.equals(tipoEntrega)) {
+            PuntoReparto sede = puntoRecojo(puntoRepartoId);
+            datosEntrega.put("tipo", TIPO_RECOJO);
+            datosEntrega.put("dir", sede.getDireccion());
+            datosEntrega.put("lat", sede.getLatitud().toPlainString());
+            datosEntrega.put("lng", sede.getLongitud().toPlainString());
+            datosEntrega.put("envio", "0.00");
+            datosEntrega.put("km", "0.00");
+            datosEntrega.put("sede", String.valueOf(sede.getId()));
+            datosEntrega.put("plazo", "0:0");
+        } else {
+            if (entrega == null) {
+                throw new IllegalArgumentException("Indica la dirección de entrega.");
+            }
+            EnvioCotizacionService.Cotizacion cotizacion = cotizacionService.cotizar(
+                    subtotal, entrega.getLatitud(), entrega.getLongitud(), Instant.now());
+            if (!cotizacion.cubierto()) {
+                throw new IllegalArgumentException(cotizacion.mensaje());
+            }
+            if (cotizacion.costoEnvio().signum() > 0) {
+                lineItems.add(SessionCreateParams.LineItem.builder()
+                        .setQuantity(1L)
+                        .setPriceData(SessionCreateParams.LineItem.PriceData.builder()
+                                .setCurrency("pen")
+                                .setUnitAmount(aCentimos(cotizacion.costoEnvio()))
+                                .setProductData(SessionCreateParams.LineItem.PriceData.ProductData.builder()
+                                        .setName("Envío a domicilio")
+                                        .build())
+                                .build())
+                        .build());
+            }
+            datosEntrega.put("tipo", TIPO_DOMICILIO);
+            datosEntrega.put("dir", entrega.getDireccion().trim());
+            datosEntrega.put("lat", entrega.getLatitud().toPlainString());
+            datosEntrega.put("lng", entrega.getLongitud().toPlainString());
+            datosEntrega.put("envio", cotizacion.costoEnvio().toPlainString());
+            datosEntrega.put("km", cotizacion.distanciaKm().toPlainString());
+            datosEntrega.put("sede", String.valueOf(cotizacion.sede().getId()));
+            datosEntrega.put("plazo", cotizacion.tarifa().getDiasEntregaMin() + ":" + cotizacion.tarifa().getDiasEntregaMax());
         }
 
         String base = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
@@ -131,14 +159,7 @@ public class PedidoService {
                     .setCancelUrl(base + "/carrito")
                     .putMetadata("email", email)
                     .putMetadata("items", metadataItems)
-                    .putMetadata("tipo", "DOMICILIO")
-                    .putMetadata("dir", entrega.getDireccion().trim())
-                    .putMetadata("lat", entrega.getLatitud().toPlainString())
-                    .putMetadata("lng", entrega.getLongitud().toPlainString())
-                    .putMetadata("envio", cotizacion.costoEnvio().toPlainString())
-                    .putMetadata("km", cotizacion.distanciaKm().toPlainString())
-                    .putMetadata("sede", String.valueOf(cotizacion.sede().getId()))
-                    .putMetadata("plazo", cotizacion.tarifa().getDiasEntregaMin() + ":" + cotizacion.tarifa().getDiasEntregaMax())
+                    .putAllMetadata(datosEntrega)
                     .addAllLineItem(lineItems)
                     .build();
             return Session.create(params).getUrl();
@@ -147,8 +168,19 @@ public class PedidoService {
         }
     }
 
-    /** Costo y fecha estimada de un carrito para una ubicación. No valida stock: eso lo hace el checkout. */
-    public CotizacionDTO cotizar(List<ItemPedidoDTO> itemsEntrada, BigDecimal latitud, BigDecimal longitud) {
+    /** Sedes donde el cliente puede recoger su pedido. */
+    public List<PuntoReparto> puntosRecojo() {
+        return puntoRepartoRepository.findByActivoTrue().stream()
+                .filter(p -> Boolean.TRUE.equals(p.getPermiteRecojo()))
+                .toList();
+    }
+
+    /**
+     * Costo y fecha estimada de un carrito. No valida stock: eso lo hace el checkout.
+     * A domicilio usa la ubicación; para recoger usa la sede (gratis, listo desde la fecha de preparación).
+     */
+    public CotizacionDTO cotizar(List<ItemPedidoDTO> itemsEntrada, String tipoEntrega,
+                                 BigDecimal latitud, BigDecimal longitud, Long puntoRepartoId) {
         BigDecimal subtotal = BigDecimal.ZERO;
         for (ItemPedidoDTO item : ventaService.consolidar(itemsEntrada)) {
             Producto p = productoRepository.findById(item.getProductoId())
@@ -157,13 +189,34 @@ public class PedidoService {
         }
         subtotal = subtotal.setScale(2, RoundingMode.HALF_UP);
 
-        EnvioCotizacionService.Cotizacion c = cotizacionService.cotizar(subtotal, latitud, longitud, Instant.now());
         CotizacionDTO dto = new CotizacionDTO();
+        if (TIPO_RECOJO.equals(tipoEntrega)) {
+            PuntoReparto sede = puntoRecojo(puntoRepartoId);
+            EnvioCotizacionService.VentanaEntrega ventana = cotizacionService.estimarEntrega(0, 0, Instant.now());
+            dto.setCubierto(true);
+            dto.setTipoEntrega(TIPO_RECOJO);
+            dto.setSubtotal(subtotal);
+            dto.setCostoEnvio(BigDecimal.ZERO.setScale(2));
+            dto.setTotal(subtotal);
+            dto.setEnvioGratis(true);
+            dto.setSedeNombre(sede.getNombre());
+            dto.setSedeDireccion(sede.getDireccion());
+            dto.setTarifaNombre("Recojo en tienda");
+            dto.setEntregaDesde(ventana.desde());
+            dto.setEntregaHasta(ventana.hasta());
+            return dto;
+        }
+
+        if (latitud == null || longitud == null) {
+            throw new IllegalArgumentException("Indica la ubicación de entrega.");
+        }
+        EnvioCotizacionService.Cotizacion c = cotizacionService.cotizar(subtotal, latitud, longitud, Instant.now());
         dto.setCubierto(c.cubierto());
         dto.setMensaje(c.mensaje());
         if (!c.cubierto()) {
             return dto;
         }
+        dto.setTipoEntrega(TIPO_DOMICILIO);
         dto.setSubtotal(subtotal);
         dto.setCostoEnvio(c.costoEnvio());
         dto.setTotal(subtotal.add(c.costoEnvio()));
@@ -174,6 +227,15 @@ public class PedidoService {
         dto.setEntregaDesde(c.entrega().desde());
         dto.setEntregaHasta(c.entrega().hasta());
         return dto;
+    }
+
+    private PuntoReparto puntoRecojo(Long id) {
+        if (id == null) {
+            throw new IllegalArgumentException("Elige dónde recoger tu pedido.");
+        }
+        return puntoRepartoRepository.findById(id)
+                .filter(p -> Boolean.TRUE.equals(p.getActivo()) && Boolean.TRUE.equals(p.getPermiteRecojo()))
+                .orElseThrow(() -> new IllegalArgumentException("Ese punto de recojo no está disponible."));
     }
 
     /** Verifica el pago en Stripe y registra la venta (idempotente). */

@@ -16,7 +16,10 @@ import utp.mastertech.mastertech.dto.VentaDTO;
 import utp.mastertech.mastertech.exception.ApiExceptionHandler;
 import utp.mastertech.mastertech.exception.ConflictException;
 import utp.mastertech.mastertech.exception.StockInsuficienteException;
+import utp.mastertech.mastertech.dto.PuntoRepartoDTO;
+import utp.mastertech.mastertech.mapper.EnvioMapper;
 import utp.mastertech.mastertech.mapper.VentaMapper;
+import utp.mastertech.mastertech.model.PuntoReparto;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.service.PedidoService;
 
@@ -28,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,6 +42,8 @@ class PedidoRestControllerTest {
     private PedidoService pedidoService;
     @Mock
     private VentaMapper ventaMapper;
+    @Mock
+    private EnvioMapper envioMapper;
 
     @InjectMocks
     private PedidoRestController controller;
@@ -61,7 +67,7 @@ class PedidoRestControllerTest {
 
     @Test
     void checkoutDevuelveLaUrlDeStripe() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class))).thenReturn("https://stripe.test/pay/abc");
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("DOMICILIO"), any(EntregaRequest.class), isNull())).thenReturn("https://stripe.test/pay/abc");
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
@@ -95,7 +101,7 @@ class PedidoRestControllerTest {
 
     @Test
     void checkoutSinStockDevuelve409() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class)))
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("DOMICILIO"), any(EntregaRequest.class), isNull()))
                 .thenThrow(new StockInsuficienteException(List.of("Solo hay 1 unidades disponibles de \"Mouse\".")));
 
         mvc.perform(post("/api/v1/pedidos/checkout")
@@ -118,7 +124,7 @@ class PedidoRestControllerTest {
 
     @Test
     void checkoutSinCoberturaDevuelve400ConElMensaje() throws Exception {
-        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), any(EntregaRequest.class)))
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("DOMICILIO"), any(EntregaRequest.class), isNull()))
                 .thenThrow(new IllegalArgumentException("Todavía no llegamos a esa dirección."));
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
@@ -137,7 +143,7 @@ class PedidoRestControllerTest {
         dto.setCubierto(true);
         dto.setCostoEnvio(new BigDecimal("12.00"));
         dto.setSedeNombre("Almacén Sur");
-        when(pedidoService.cotizar(anyList(), any(BigDecimal.class), any(BigDecimal.class))).thenReturn(dto);
+        when(pedidoService.cotizar(anyList(), eq("DOMICILIO"), any(BigDecimal.class), any(BigDecimal.class), isNull())).thenReturn(dto);
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/cotizar")
                         .principal(ana)
@@ -159,6 +165,61 @@ class PedidoRestControllerTest {
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(pedidoService);
+    }
+
+    @Test
+    void checkoutParaRecojoNoNecesitaDireccion() throws Exception {
+        when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("RECOJO"), isNull(), eq(3L)))
+                .thenReturn("https://stripe.test/pay/recojo");
+
+        String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"tipoEntrega\":\"RECOJO\",\"puntoRepartoId\":3}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(cuerpo.contains("https://stripe.test/pay/recojo"));
+    }
+
+    @Test
+    void checkoutParaRecojoSinSedeDevuelve400() throws Exception {
+        mvc.perform(post("/api/v1/pedidos/checkout")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"tipoEntrega\":\"RECOJO\"}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(pedidoService);
+    }
+
+    @Test
+    void puntosDeRecojoSeListanParaElCliente() throws Exception {
+        PuntoReparto sede = new PuntoReparto();
+        PuntoRepartoDTO dto = new PuntoRepartoDTO();
+        dto.setNombre("Almacén Sur");
+        when(pedidoService.puntosRecojo()).thenReturn(List.of(sede));
+        when(envioMapper.toDTO(sede)).thenReturn(dto);
+
+        String cuerpo = mvc.perform(get("/api/v1/pedidos/puntos-recojo").principal(ana))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertTrue(cuerpo.contains("Almacén Sur"));
+    }
+
+    @Test
+    void cotizarRecojoNoNecesitaUbicacion() throws Exception {
+        CotizacionDTO dto = new CotizacionDTO();
+        dto.setCubierto(true);
+        dto.setTipoEntrega("RECOJO");
+        when(pedidoService.cotizar(anyList(), eq("RECOJO"), isNull(), isNull(), eq(3L))).thenReturn(dto);
+
+        mvc.perform(post("/api/v1/pedidos/cotizar")
+                        .principal(ana)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"items\":[{\"productoId\":1,\"cantidad\":2}],\"tipoEntrega\":\"RECOJO\",\"puntoRepartoId\":3}"))
+                .andExpect(status().isOk());
     }
 
     @Test
