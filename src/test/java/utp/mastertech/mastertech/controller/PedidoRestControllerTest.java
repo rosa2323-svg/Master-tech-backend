@@ -173,7 +173,7 @@ class PedidoRestControllerTest {
     @Test
     void checkoutParaRecojoNoNecesitaDireccion() throws Exception {
         when(pedidoService.crearCheckout(eq("ana@x.com"), anyList(), eq("RECOJO"), isNull(), eq(3L)))
-                .thenReturn("https://stripe.test/pay/recojo");
+                .thenReturn(new utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO("cs_secret_recojo", "pk_test_1", 1790000000L));
 
         String cuerpo = mvc.perform(post("/api/v1/pedidos/checkout")
                         .principal(ana)
@@ -182,7 +182,7 @@ class PedidoRestControllerTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertTrue(cuerpo.contains("https://stripe.test/pay/recojo"));
+        assertTrue(cuerpo.contains("\"clientSecret\":\"cs_secret_recojo\""));
     }
 
     @Test
