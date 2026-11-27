@@ -45,6 +45,9 @@ class VentaServiceTest {
     @Mock
     private UsuarioRepository usuarioRepository;
 
+    @Mock
+    private utp.mastertech.mastertech.repository.SolicitudReembolsoRepository solicitudReembolsoRepository;
+
     @InjectMocks
     private VentaService service;
 
@@ -474,5 +477,23 @@ class VentaServiceTest {
 
         assertEquals(400, ex.getStatusCode().value());
         assertTrue(ex.getReason().contains("ANULADA"));
+    }
+
+    @Test
+    void noSeAvanzaUnPedidoConReembolsoPendiente() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
+        when(solicitudReembolsoRepository.existsByVentaIdAndEstado(1L, "PENDIENTE")).thenReturn(true);
+
+        assertThrows(utp.mastertech.mastertech.exception.ConflictException.class,
+                () -> service.cambiarEstado(1L, "Preparando"));
+        verify(ventaRepository, never()).save(any(Venta.class));
+    }
+
+    @Test
+    void procesarVentaGuardaElPagoDeStripeParaPoderReembolsar() {
+        Producto p = producto(1, "Mouse", 10.0, 5);
+        Venta v = service.procesarVenta(List.of(item(1L, 1)), new Usuario(), "ORD-X", null, "pi_123");
+
+        assertEquals("pi_123", v.getStripePaymentIntentId());
     }
 }

@@ -77,6 +77,22 @@ class DespachoControllerTest {
     }
 
     @Test
+    void listarMarcaLosPedidosConReembolsoPendiente() throws Exception {
+        Venta v1 = new Venta();
+        v1.setId(2L);
+        Venta v2 = new Venta();
+        v2.setId(1L);
+        when(ventaService.listarParaDespacho()).thenReturn(List.of(v1, v2));
+        when(ventaService.ventasConReembolsoPendiente()).thenReturn(java.util.Set.of(2L));
+        when(ventaMapper.toDTO(v1)).thenReturn(dto(2L, "Pagado"));
+        when(ventaMapper.toDTO(v2)).thenReturn(dto(1L, "Preparando"));
+
+        mvc.perform(get("/api/v1/despacho/pedidos"))
+                .andExpect(jsonPath("$[0].reembolsoPendiente").value(true))
+                .andExpect(jsonPath("$[1].reembolsoPendiente").value(false));
+    }
+
+    @Test
     void listarSinPedidosDevuelveListaVacia() throws Exception {
         when(ventaService.listarParaDespacho()).thenReturn(List.of());
 

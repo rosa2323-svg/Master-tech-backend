@@ -433,7 +433,7 @@ class PedidoServiceTest {
         Venta venta = new Venta();
         Session s = sesionPagada("ANA@x.com", "12:2,15:1");
         when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
-        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull())).thenReturn(venta);
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(venta);
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
@@ -446,7 +446,7 @@ class PedidoServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ItemPedidoDTO>> items = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<String> orden = ArgumentCaptor.forClass(String.class);
-        verify(ventaService).procesarVenta(items.capture(), eq(usuario), orden.capture(), isNull());
+        verify(ventaService).procesarVenta(items.capture(), eq(usuario), orden.capture(), isNull(), any());
 
         assertEquals(2, items.getValue().size());
         assertEquals(12L, items.getValue().get(0).getProductoId());
@@ -462,7 +462,7 @@ class PedidoServiceTest {
         Usuario usuario = new Usuario();
         Session s = sesionPagada("ana@x.com", "1:1");
         when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
-        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull())).thenReturn(new Venta());
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(new Venta());
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.retrieve("cs_misma")).thenReturn(s);
@@ -471,7 +471,7 @@ class PedidoServiceTest {
         }
 
         ArgumentCaptor<String> orden = ArgumentCaptor.forClass(String.class);
-        verify(ventaService, times(2)).procesarVenta(anyList(), eq(usuario), orden.capture(), isNull());
+        verify(ventaService, times(2)).procesarVenta(anyList(), eq(usuario), orden.capture(), isNull(), any());
         assertEquals(orden.getAllValues().get(0), orden.getAllValues().get(1));
     }
 
@@ -489,7 +489,7 @@ class PedidoServiceTest {
         when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sede));
         when(cotizacionService.estimarEntrega(eq(1), eq(2), any(Instant.class)))
                 .thenReturn(new EnvioCotizacionService.VentanaEntrega(LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 2)));
-        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), any(EntregaPedido.class))).thenReturn(new Venta());
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), any(EntregaPedido.class), any())).thenReturn(new Venta());
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
@@ -497,7 +497,7 @@ class PedidoServiceTest {
         }
 
         ArgumentCaptor<EntregaPedido> entrega = ArgumentCaptor.forClass(EntregaPedido.class);
-        verify(ventaService).procesarVenta(anyList(), eq(usuario), anyString(), entrega.capture());
+        verify(ventaService).procesarVenta(anyList(), eq(usuario), anyString(), entrega.capture(), any());
         EntregaPedido e = entrega.getValue();
         assertEquals("DOMICILIO", e.tipo());
         assertEquals(0, new BigDecimal("12.00").compareTo(e.costoEnvio()));

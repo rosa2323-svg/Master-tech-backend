@@ -260,7 +260,8 @@ public class PedidoService {
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + email));
 
         List<ItemPedidoDTO> items = decodificarItems(metadata.get("items"));
-        return ventaService.procesarVenta(items, usuario, numeroOrdenDe(sessionId), entregaDe(metadata));
+        return ventaService.procesarVenta(items, usuario, numeroOrdenDe(sessionId), entregaDe(metadata),
+                session.getPaymentIntent());
     }
 
     /**

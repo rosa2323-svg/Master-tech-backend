@@ -12,6 +12,7 @@ import utp.mastertech.mastertech.mapper.VentaMapper;
 import utp.mastertech.mastertech.service.VentaService;
 
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /** Vista del despachador (DESPACHADOR y ADMIN, ver SecurityConfig). */
@@ -30,8 +31,10 @@ public class DespachoController {
 
     @GetMapping("/pedidos")
     public List<VentaDTO> listar() {
+        Set<Long> conReembolso = ventaService.ventasConReembolsoPendiente();
         return ventaService.listarParaDespacho().stream()
                 .map(ventaMapper::toDTO)
+                .peek(dto -> dto.setReembolsoPendiente(conReembolso.contains(dto.getId())))
                 .collect(Collectors.toList());
     }
 

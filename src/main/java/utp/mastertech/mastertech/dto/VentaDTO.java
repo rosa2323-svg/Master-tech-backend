@@ -25,6 +25,9 @@ public class VentaDTO {
     /** Próximo estado del flujo de despacho; null si ya terminó o no está en el flujo. */
     private String siguienteEstado;
 
+    /** Solo en la vista de despacho: el cliente pidió reembolso y falta resolverlo. */
+    private boolean reembolsoPendiente;
+
     private Long usuarioId;
 
     private String usuarioNombre;

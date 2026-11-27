@@ -6,16 +6,19 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import utp.mastertech.mastertech.dto.ItemPedidoDTO;
+import utp.mastertech.mastertech.exception.ConflictException;
 import utp.mastertech.mastertech.exception.ResourceNotFoundException;
 import utp.mastertech.mastertech.exception.StockInsuficienteException;
 import utp.mastertech.mastertech.model.DetalleVenta;
 import utp.mastertech.mastertech.model.EnvioEvento;
 import utp.mastertech.mastertech.model.Producto;
+import utp.mastertech.mastertech.model.SolicitudReembolso;
 import utp.mastertech.mastertech.model.Usuario;
 import utp.mastertech.mastertech.model.Venta;
 import utp.mastertech.mastertech.repository.DetalleVentaRepository;
 import utp.mastertech.mastertech.repository.EnvioEventoRepository;
 import utp.mastertech.mastertech.repository.ProductoRepository;
+import utp.mastertech.mastertech.repository.SolicitudReembolsoRepository;
 import utp.mastertech.mastertech.repository.UsuarioRepository;
 import utp.mastertech.mastertech.repository.VentaRepository;
 
@@ -27,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,6 +50,9 @@ public class VentaService {
 
     @Autowired
     private UsuarioRepository usuarioRepository;
+
+    @Autowired
+    private SolicitudReembolsoRepository solicitudReembolsoRepository;
 
     public static final String EN_RUTA = "En ruta";
     public static final String ENTREGADO = "Entregado";
@@ -125,6 +132,13 @@ public class VentaService {
     @Transactional
     public Venta procesarVenta(List<ItemPedidoDTO> itemsEntrada, Usuario usuario, String numeroOrden,
                                EntregaPedido entrega) {
+        return procesarVenta(itemsEntrada, usuario, numeroOrden, entrega, null);
+    }
+
+    /** Igual que la anterior, guardando también el pago de Stripe (necesario para poder reembolsar). */
+    @Transactional
+    public Venta procesarVenta(List<ItemPedidoDTO> itemsEntrada, Usuario usuario, String numeroOrden,
+                               EntregaPedido entrega, String stripePaymentIntentId) {
         Optional<Venta> existente = ventaRepository.findByNumeroOrden(numeroOrden);
         if (existente.isPresent()) {
             return existente.get();
@@ -188,6 +202,7 @@ public class VentaService {
             venta.setPuntoReparto(entrega.sede());
             venta.setFechaEstimadaEntrega(entrega.fechaEstimada());
         }
+        venta.setStripePaymentIntentId(stripePaymentIntentId);
         Venta guardada = ventaRepository.save(venta);
         registrarEvento(guardada, "Pagado", null, "Pago confirmado");
         return guardada;
@@ -245,6 +260,10 @@ public class VentaService {
                             : "Desde " + estadoActual + " solo se puede pasar a " + siguiente);
         }
 
+        if (solicitudReembolsoRepository.existsByVentaIdAndEstado(id, SolicitudReembolso.PENDIENTE)) {
+            throw new ConflictException("Hay un reembolso pendiente: resuélvelo antes de avanzar este pedido.");
+        }
+
         venta.setEstado(nuevoEstado);
         if (ENTREGADO.equals(nuevoEstado)) {
             venta.setFechaEntregaReal(LocalDateTime.now());
@@ -253,6 +272,11 @@ public class VentaService {
         registrarEvento(guardada, nuevoEstado,
                 email == null ? null : usuarioRepository.findByEmail(email).orElse(null), nota);
         return guardada;
+    }
+
+    /** Ids de los pedidos con una solicitud de reembolso sin resolver. */
+    public Set<Long> ventasConReembolsoPendiente() {
+        return solicitudReembolsoRepository.findVentaIdsPendientes();
     }
 
     /** Historial de un pedido (vista del despachador). */
