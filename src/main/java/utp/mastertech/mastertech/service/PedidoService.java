@@ -7,7 +7,11 @@ import com.stripe.param.checkout.SessionCreateParams;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO;
 import utp.mastertech.mastertech.dto.CotizacionDTO;
 import utp.mastertech.mastertech.dto.EntregaRequest;
 import utp.mastertech.mastertech.dto.ItemPedidoDTO;
@@ -39,10 +43,17 @@ import java.util.Map;
 /**
  * Checkout sin sesión de servidor: el front envía las líneas del carrito (id + cantidad),
  * el backend toma precios y stock de la BD, crea la sesión de Stripe y guarda las líneas
- * en la metadata de esa sesión. Al volver del pago, /confirmar lee la metadata y registra la venta.
+ * en la metadata de esa sesión. La venta se registra al volver del pago (/confirmar) o cuando Stripe avisa
+ * por webhook, lo que ocurra primero: ambos caminos son idempotentes.
  */
 @Service
 public class PedidoService {
+
+    private static final Logger log = LoggerFactory.getLogger(PedidoService.class);
+
+    /** Stripe exige que la sesión dure entre 30 minutos y 24 horas. */
+    private static final int MIN_EXPIRACION_MIN = 30;
+    private static final int MAX_EXPIRACION_MIN = 1440;
 
     private static final int MAX_METADATA = 500; // límite de Stripe por valor de metadata
     private static final String TIPO_DOMICILIO = "DOMICILIO";
@@ -63,8 +74,17 @@ public class PedidoService {
     @Autowired
     private EnvioCotizacionService cotizacionService;
 
+    @Autowired
+    private StripeReembolsoClient stripeReembolso;
+
     @Value("${stripe.secret.key}")
     private String stripeSecretKey;
+
+    @Value("${stripe.publishable.key:}")
+    private String stripePublishableKey;
+
+    @Value("${stripe.checkout.expiracion-minutos:30}")
+    private int expiracionMinutos;
 
     @Value("${app.frontend.url}")
     private String frontendUrl;
@@ -74,8 +94,8 @@ public class PedidoService {
         Stripe.apiKey = stripeSecretKey;
     }
 
-    /** @return URL de Stripe Checkout a la que el front debe redirigir al cliente. */
-    public String crearCheckout(String email, List<ItemPedidoDTO> itemsEntrada, String tipoEntrega,
+    /** Crea una sesión de Checkout incrustado con tiempo límite para pagar. */
+    public CheckoutEmbebidoDTO crearCheckout(String email, List<ItemPedidoDTO> itemsEntrada, String tipoEntrega,
                                 EntregaRequest entrega, Long puntoRepartoId) {
         List<ItemPedidoDTO> items = ventaService.consolidar(itemsEntrada);
 
@@ -151,18 +171,27 @@ public class PedidoService {
             datosEntrega.put("plazo", cotizacion.tarifa().getDiasEntregaMin() + ":" + cotizacion.tarifa().getDiasEntregaMax());
         }
 
+        if (stripePublishableKey == null || stripePublishableKey.isBlank()) {
+            throw new PagoException("Falta configurar la clave pública de Stripe (STRIPE_PUBLISHABLE_KEY).", null);
+        }
+
         String base = frontendUrl.endsWith("/") ? frontendUrl.substring(0, frontendUrl.length() - 1) : frontendUrl;
+        // Stripe rechaza vencimientos a menos de 30 min del momento en que recibe la petición: 1 min de margen.
+        long minutos = Math.max(MIN_EXPIRACION_MIN, Math.min(MAX_EXPIRACION_MIN, expiracionMinutos));
+        long expiraEn = Instant.now().plusSeconds(minutos * 60 + 60).getEpochSecond();
         try {
             SessionCreateParams params = SessionCreateParams.builder()
                     .setMode(SessionCreateParams.Mode.PAYMENT)
-                    .setSuccessUrl(base + "/pago/confirmar?session_id={CHECKOUT_SESSION_ID}")
-                    .setCancelUrl(base + "/carrito")
+                    .setUiMode(SessionCreateParams.UiMode.EMBEDDED)
+                    .setReturnUrl(base + "/pago/confirmar?session_id={CHECKOUT_SESSION_ID}")
+                    .setExpiresAt(expiraEn)
                     .putMetadata("email", email)
                     .putMetadata("items", metadataItems)
                     .putAllMetadata(datosEntrega)
                     .addAllLineItem(lineItems)
                     .build();
-            return Session.create(params).getUrl();
+            Session session = Session.create(params);
+            return new CheckoutEmbebidoDTO(session.getClientSecret(), stripePublishableKey, expiraEn);
         } catch (StripeException e) {
             throw new PagoException("Error al conectar con Stripe: " + e.getMessage(), e);
         }
@@ -240,12 +269,7 @@ public class PedidoService {
 
     /** Verifica el pago en Stripe y registra la venta (idempotente). */
     public Venta confirmar(String email, String sessionId) {
-        Session session;
-        try {
-            session = Session.retrieve(sessionId);
-        } catch (StripeException e) {
-            throw new PagoException("No se pudo verificar el pago con Stripe.", e);
-        }
+        Session session = obtenerSesion(sessionId);
 
         if (!"paid".equals(session.getPaymentStatus())) {
             throw new ConflictException("El pago todavía no figura como completado.");
@@ -255,13 +279,65 @@ public class PedidoService {
         if (metadata == null || !email.equalsIgnoreCase(metadata.get("email"))) {
             throw new ConflictException("Esta sesión de pago pertenece a otra cuenta.");
         }
+        return registrarVenta(session, sessionId, metadata, email);
+    }
 
+    /**
+     * Aviso de Stripe (webhook): registra la venta de una sesión pagada aunque el cliente no haya vuelto a la tienda.
+     * Sin pago completado no hace nada. Si ya estaba registrada (por /confirmar) no la duplica.
+     */
+    public void registrarPagoDeSesion(String sessionId) {
+        Session session = obtenerSesion(sessionId);
+        if (!"paid".equals(session.getPaymentStatus())) {
+            log.info("Sesión {} sin pago completado: no se registra venta", sessionId);
+            return;
+        }
+        Map<String, String> metadata = session.getMetadata();
+        if (metadata == null || metadata.get("email") == null) {
+            log.warn("Sesión {} sin email en la metadata: no es un pedido de la tienda", sessionId);
+            return;
+        }
+        try {
+            registrarVenta(session, sessionId, metadata, metadata.get("email"));
+        } catch (ConflictException e) {
+            // Sin stock: el pago ya se devolvió. Responder con éxito para que Stripe no reintente el aviso.
+            log.warn("Pedido de la sesión {} no registrado: {}", sessionId, e.getMessage());
+        }
+    }
+
+    private Session obtenerSesion(String sessionId) {
+        try {
+            return Session.retrieve(sessionId);
+        } catch (StripeException e) {
+            throw new PagoException("No se pudo verificar el pago con Stripe.", e);
+        }
+    }
+
+    private Venta registrarVenta(Session session, String sessionId, Map<String, String> metadata, String email) {
         Usuario usuario = usuarioRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuario no encontrado: " + email));
 
         List<ItemPedidoDTO> items = decodificarItems(metadata.get("items"));
-        return ventaService.procesarVenta(items, usuario, numeroOrdenDe(sessionId), entregaDe(metadata),
-                session.getPaymentIntent());
+        String numeroOrden = numeroOrdenDe(sessionId);
+        EntregaPedido entrega = entregaDe(metadata);
+        try {
+            return ventaService.procesarVenta(items, usuario, numeroOrden, entrega, session.getPaymentIntent());
+        } catch (DataIntegrityViolationException e) {
+            // /confirmar y el webhook llegaron a la vez y el otro registró primero: devolver esa venta.
+            return ventaService.procesarVenta(items, usuario, numeroOrden, entrega, session.getPaymentIntent());
+        } catch (StockInsuficienteException e) {
+            // El cliente ya pagó pero el stock se agotó mientras tanto: se le devuelve el dinero completo.
+            devolverPago(session, sessionId);
+            throw new ConflictException("Algunos productos se agotaron mientras pagabas. Te devolvimos el pago completo.");
+        }
+    }
+
+    private void devolverPago(Session session, String sessionId) {
+        if (session.getPaymentIntent() == null) {
+            log.error("Sesión {} pagada sin stock y sin payment_intent: devolver el pago a mano", sessionId);
+            return;
+        }
+        stripeReembolso.reembolsar(session.getPaymentIntent(), "reembolso-sin-stock-" + sessionId);
     }
 
     /**

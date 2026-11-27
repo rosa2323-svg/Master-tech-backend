@@ -11,7 +11,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
+import utp.mastertech.mastertech.dto.CheckoutEmbebidoDTO;
 import utp.mastertech.mastertech.dto.CotizacionDTO;
 import utp.mastertech.mastertech.dto.EntregaRequest;
 import utp.mastertech.mastertech.dto.ItemPedidoDTO;
@@ -58,12 +60,17 @@ class PedidoServiceTest {
     @Mock
     private EnvioCotizacionService cotizacionService;
 
+    @Mock
+    private StripeReembolsoClient stripeReembolso;
+
     @InjectMocks
     private PedidoService service;
 
     @BeforeEach
     void configurar() {
         ReflectionTestUtils.setField(service, "frontendUrl", "http://localhost:5173/");
+        ReflectionTestUtils.setField(service, "stripePublishableKey", "pk_test_123");
+        ReflectionTestUtils.setField(service, "expiracionMinutos", 30);
     }
 
     private ItemPedidoDTO item(long productoId, int cantidad) {
@@ -119,12 +126,14 @@ class PedidoServiceTest {
                     return c;
                 });
         Session sesion = mock(Session.class);
-        when(sesion.getUrl()).thenReturn("https://stripe.test/pay");
+        when(sesion.getClientSecret()).thenReturn("cs_secret_abc");
         ArgumentCaptor<SessionCreateParams> params = ArgumentCaptor.forClass(SessionCreateParams.class);
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
             stripe.when(() -> Session.create(any(SessionCreateParams.class))).thenReturn(sesion);
 
-            assertEquals("https://stripe.test/pay", service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null));
+            CheckoutEmbebidoDTO dto = service.crearCheckout("ana@x.com", items, "DOMICILIO", entrega(), null);
+            assertEquals("cs_secret_abc", dto.clientSecret());
+            assertEquals("pk_test_123", dto.publishableKey());
 
             stripe.verify(() -> Session.create(params.capture()));
         }
@@ -285,7 +294,6 @@ class PedidoServiceTest {
         carritoConUnProducto();
         when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
         Session sesion = mock(Session.class);
-        when(sesion.getUrl()).thenReturn("https://stripe.test/pay");
         ArgumentCaptor<SessionCreateParams> params = ArgumentCaptor.forClass(SessionCreateParams.class);
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
@@ -506,5 +514,131 @@ class PedidoServiceTest {
         assertEquals(0, new BigDecimal("7.35").compareTo(e.distanciaKm()));
         assertSame(sede, e.sede());
         assertEquals(LocalDate.of(2026, 12, 2), e.fechaEstimada());
+    }
+
+    // ---------- checkout incrustado y tiempo límite ----------
+
+    @Test
+    void elCheckoutEsIncrustadoYTieneTiempoLimite() {
+        long antes = Instant.now().getEpochSecond();
+        SessionCreateParams p = checkoutConCotizacion(cotizacion("12.00", false, sede(3)), new BigDecimal[1]);
+        long despues = Instant.now().getEpochSecond();
+
+        assertEquals(SessionCreateParams.UiMode.EMBEDDED, p.getUiMode());
+        assertEquals("http://localhost:5173/pago/confirmar?session_id={CHECKOUT_SESSION_ID}", p.getReturnUrl());
+        assertNull(p.getSuccessUrl());
+        // 30 min + 1 min de margen: Stripe exige al menos 30 min desde que recibe la petición
+        assertTrue(p.getExpiresAt() >= antes + 31 * 60 && p.getExpiresAt() <= despues + 31 * 60);
+    }
+
+    @Test
+    void laExpiracionSeLimitaAlRangoQueAceptaStripe() {
+        ReflectionTestUtils.setField(service, "expiracionMinutos", 5);
+        long minimo = Instant.now().getEpochSecond() + 30 * 60;
+        assertTrue(checkoutConCotizacion(cotizacion("12.00", false, sede(3)), new BigDecimal[1]).getExpiresAt() >= minimo);
+    }
+
+    @Test
+    void sinClavePublicaDeStripeNoSeCreaLaSesion() {
+        ReflectionTestUtils.setField(service, "stripePublishableKey", "");
+        carritoConUnProducto();
+        when(puntoRepartoRepository.findById(3L)).thenReturn(Optional.of(sedeRecojo(3, true, true)));
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            assertThrows(PagoException.class, () -> service.crearCheckout("ana@x.com", List.of(item(1, 2)), "RECOJO", null, 3L));
+            stripe.verifyNoInteractions();
+        }
+    }
+
+    // ---------- webhook / registro idempotente ----------
+
+    @Test
+    void elWebhookRegistraLaVentaDeUnaSesionPagada() {
+        Usuario usuario = new Usuario();
+        when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(new Venta());
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesionPagada("ana@x.com", "1:2"));
+            service.registrarPagoDeSesion("cs_1");
+        }
+
+        verify(ventaService).procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any());
+    }
+
+    @Test
+    void elWebhookIgnoraUnaSesionNoPagada() {
+        Session pendiente = mock(Session.class);
+        when(pendiente.getPaymentStatus()).thenReturn("unpaid");
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(pendiente);
+            service.registrarPagoDeSesion("cs_1");
+        }
+
+        verifyNoInteractions(ventaService);
+    }
+
+    @Test
+    void elWebhookIgnoraUnaSesionAjenaALaTienda() {
+        Session ajena = mock(Session.class);
+        when(ajena.getPaymentStatus()).thenReturn("paid");
+        when(ajena.getMetadata()).thenReturn(Map.of());
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(ajena);
+            service.registrarPagoDeSesion("cs_1");
+        }
+
+        verifyNoInteractions(ventaService);
+    }
+
+    @Test
+    void siConfirmarYElWebhookChocanSeDevuelveLaVentaYaRegistrada() {
+        Usuario usuario = new Usuario();
+        Venta existente = new Venta();
+        when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any()))
+                .thenThrow(new DataIntegrityViolationException("numero_orden duplicado"))
+                .thenReturn(existente);
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesionPagada("ana@x.com", "1:2"));
+            assertSame(existente, service.confirmar("ana@x.com", "cs_1"));
+        }
+    }
+
+    @Test
+    void sinStockTrasPagarSeReembolsaYElWebhookNoReintenta() {
+        Usuario usuario = new Usuario();
+        Session s = sesionPagada("ana@x.com", "1:2");
+        when(s.getPaymentIntent()).thenReturn("pi_9");
+        when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any()))
+                .thenThrow(new StockInsuficienteException("Sin stock"));
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
+            service.registrarPagoDeSesion("cs_1"); // no lanza: Stripe recibe 200
+        }
+
+        verify(stripeReembolso).reembolsar("pi_9", "reembolso-sin-stock-cs_1");
+    }
+
+    @Test
+    void sinStockTrasPagarConfirmarAvisaAlClienteQueSeLeDevolvioElPago() {
+        Usuario usuario = new Usuario();
+        Session s = sesionPagada("ana@x.com", "1:2");
+        when(s.getPaymentIntent()).thenReturn("pi_9");
+        when(usuarioRepository.findByEmail("ana@x.com")).thenReturn(Optional.of(usuario));
+        when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any()))
+                .thenThrow(new StockInsuficienteException("Sin stock"));
+
+        try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(s);
+            ConflictException ex = assertThrows(ConflictException.class, () -> service.confirmar("ana@x.com", "cs_1"));
+            assertTrue(ex.getMessage().contains("devolvimos el pago"));
+        }
+        verify(stripeReembolso).reembolsar("pi_9", "reembolso-sin-stock-cs_1");
     }
 }

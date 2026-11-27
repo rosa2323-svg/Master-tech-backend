@@ -56,6 +56,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/api/auth/login", "/api/auth/registro").permitAll()
+                        // Webhook de Stripe: sin JWT, se protege con la firma del encabezado Stripe-Signature
+                        .requestMatchers(HttpMethod.POST, "/api/stripe/webhook").permitAll()
                         // Catálogo público (solo lectura)
                         .requestMatchers(HttpMethod.GET, "/api/v1/productos/**", "/api/v1/categorias/**").permitAll()
                         // Cliente autenticado
