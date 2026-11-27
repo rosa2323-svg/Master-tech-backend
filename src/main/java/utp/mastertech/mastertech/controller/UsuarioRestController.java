@@ -2,6 +2,7 @@ package utp.mastertech.mastertech.controller;
 
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -102,7 +103,13 @@ public class UsuarioRestController {
         if (usuario.getEmail().equalsIgnoreCase(auth.getName())) {
             throw new ConflictException("No puedes eliminar tu propia cuenta.");
         }
-        usuarioRepository.delete(usuario);
+        try {
+            usuarioRepository.delete(usuario);
+        } catch (DataIntegrityViolationException e) {
+            // Tiene ventas, reembolsos o eventos de envío: la FK impide borrarlo para no perder la trazabilidad.
+            throw new ConflictException("No se puede eliminar a " + usuario.getNombre()
+                    + " porque tiene pedidos u otros movimientos registrados. Se conservan por trazabilidad.");
+        }
         return ResponseEntity.noContent().build();
     }
 

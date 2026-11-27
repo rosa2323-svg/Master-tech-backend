@@ -134,9 +134,20 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorResponse> handleIntegrity(DataIntegrityViolationException ex, HttpServletRequest request) {
-        log.warn("Violación de integridad: {}", ex.getMostSpecificCause().getMessage());
+        String causa = ex.getMostSpecificCause().getMessage();
+        log.warn("Violación de integridad: {}", causa);
+        if (esLlaveForanea(causa)) {
+            return responder(HttpStatus.CONFLICT,
+                    "No se puede completar la acción porque este registro está asociado a otros datos "
+                            + "(por ejemplo ventas o reembolsos) que se conservan por trazabilidad.", request);
+        }
         return responder(HttpStatus.CONFLICT,
-                "Ya existe un registro con esos datos (correo, DNI o teléfono) o el registro está en uso.", request);
+                "Ya existe un registro con esos datos (correo, DNI o teléfono).", request);
+    }
+
+    /** PostgreSQL: «violates foreign key constraint» al borrar/cambiar algo que otra tabla referencia. */
+    private static boolean esLlaveForanea(String causa) {
+        return causa != null && causa.toLowerCase().contains("foreign key");
     }
 
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
