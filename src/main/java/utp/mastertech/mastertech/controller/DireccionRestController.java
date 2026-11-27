@@ -1,6 +1,7 @@
 package utp.mastertech.mastertech.controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import java.math.BigDecimal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -29,6 +30,12 @@ public class DireccionRestController {
     @GetMapping("/sugerencias")
     public List<SugerenciaDTO> sugerencias(@RequestParam String texto, @RequestParam String token) {
         return direccionService.sugerir(texto, token);
+    }
+
+    /** Dirección de un punto marcado con el pin del mapa. */
+    @GetMapping("/inversa")
+    public LugarDTO inversa(@RequestParam BigDecimal latitud, @RequestParam BigDecimal longitud) {
+        return direccionService.inversa(latitud, longitud);
     }
 
     @GetMapping("/detalle")

@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Autocompletado de direcciones con Places API (New). Pasa por el back para que la clave de Google
+ * Autocompletado de direcciones con Places API (New) y dirección de un punto marcado en el mapa (Geocoding API). Pasa por el back para que la clave de Google
  * viva solo en el servidor (GOOGLE_MAPS_SERVER_KEY) y no en el navegador.
  * Las sugerencias y el detalle comparten el mismo sessionToken para que Google los cobre como una sesión.
  */
@@ -90,6 +90,28 @@ public class DireccionService {
         }
     }
 
+    /**
+     * Dirección de un punto marcado con el pin del mapa. La ubicación que se guarda es la del pin (exacta);
+     * Google solo aporta el texto de la dirección.
+     */
+    public LugarDTO inversa(BigDecimal latitud, BigDecimal longitud) {
+        exigirHabilitado();
+        if (latitud == null || longitud == null
+                || latitud.abs().compareTo(BigDecimal.valueOf(90)) > 0
+                || longitud.abs().compareTo(BigDecimal.valueOf(180)) > 0) {
+            throw new IllegalArgumentException("La ubicación marcada no es válida.");
+        }
+        BigDecimal lat = latitud.setScale(6, RoundingMode.HALF_UP);
+        BigDecimal lng = longitud.setScale(6, RoundingMode.HALF_UP);
+        try {
+            return new LugarDTO(aDireccion(geocodificar(lat, lng)), lat, lng);
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw falloGoogle(e);
+        }
+    }
+
     // ---- llamadas HTTP (aisladas para poder simularlas en pruebas) ----
 
     Map<String, Object> autocompletar(Map<String, Object> cuerpo) {
@@ -109,7 +131,36 @@ public class DireccionService {
                 .body(MAPA);
     }
 
+    Map<String, Object> geocodificar(BigDecimal lat, BigDecimal lng) {
+        return rest.get()
+                .uri("https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lng}&language=es&region=pe&key={key}",
+                        lat.toPlainString(), lng.toPlainString(), apiKey)
+                .retrieve()
+                .body(MAPA);
+    }
+
     // ---- conversión de respuestas ----
+
+    /** Primera dirección legible (se evitan los «plus codes» tipo 9XQ4+8V cuando hay algo mejor). */
+    @SuppressWarnings("unchecked")
+    static String aDireccion(Map<String, Object> respuesta) {
+        Object estado = respuesta == null ? null : respuesta.get("status");
+        if ("ZERO_RESULTS".equals(estado)) {
+            throw new IllegalArgumentException("No encontramos una dirección en ese punto. Prueba con otro punto del mapa.");
+        }
+        if (!"OK".equals(estado) || !(respuesta.get("results") instanceof List<?> resultados)) {
+            throw new IllegalStateException("Respuesta de geocodificación: " + estado);
+        }
+        String respaldo = null;
+        for (Object r : resultados) {
+            if (!(r instanceof Map<?, ?> resultado) || !(resultado.get("formatted_address") instanceof String texto)) continue;
+            boolean plusCode = resultado.get("types") instanceof List<?> tipos && tipos.contains("plus_code");
+            if (!plusCode) return texto;
+            if (respaldo == null) respaldo = texto;
+        }
+        if (respaldo != null) return respaldo;
+        throw new IllegalArgumentException("No encontramos una dirección en ese punto. Prueba con otro punto del mapa.");
+    }
 
     @SuppressWarnings("unchecked")
     static List<SugerenciaDTO> aSugerencias(Map<String, Object> respuesta) {
@@ -155,7 +206,8 @@ public class DireccionService {
     }
 
     private static ResponseStatusException falloGoogle(RuntimeException e) {
-        log.warn("Falló la consulta de direcciones a Google: {}", e.getMessage());
+        // No se registra e.getMessage(): en errores de conexión incluye la URL completa, con la clave de Google.
+        log.warn("Falló la consulta de direcciones a Google ({})", e.getClass().getSimpleName());
         return new ResponseStatusException(HttpStatus.BAD_GATEWAY, "No se pudo consultar el servicio de direcciones.");
     }
 }

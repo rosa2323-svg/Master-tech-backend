@@ -87,4 +87,21 @@ class DireccionRestControllerTest {
 
         assertTrue(cuerpo.contains("-12.085"));
     }
+
+    @Test
+    void inversaDevuelveLaDireccionDelPunto() throws Exception {
+        when(direccionService.inversa(new BigDecimal("-12.091200"), new BigDecimal("-77.034500")))
+                .thenReturn(new LugarDTO("Av. Arequipa 123, Lince", new BigDecimal("-12.091200"), new BigDecimal("-77.034500")));
+
+        String cuerpo = mvc.perform(get("/api/v1/pedidos/direcciones/inversa").param("latitud", "-12.0912").param("longitud", "-77.0345"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+
+        assertTrue(cuerpo.contains("Av. Arequipa 123, Lince"));
+    }
+
+    @Test
+    void inversaSinParametrosDevuelve400() throws Exception {
+        mvc.perform(get("/api/v1/pedidos/direcciones/inversa")).andExpect(status().isBadRequest());
+        verifyNoInteractions(direccionService);
+    }
 }

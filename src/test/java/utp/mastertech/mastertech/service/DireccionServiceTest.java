@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -111,5 +112,80 @@ class DireccionServiceTest {
     void detalleRechazaIdentificadoresRaros() {
         assertThrows(IllegalArgumentException.class, () -> service.detalle("../admin", TOKEN));
         verify(service, never()).detalleLugar(anyString(), anyString());
+    }
+
+    // ---------- dirección de un punto marcado en el mapa ----------
+
+    private static Map<String, Object> geocodeOk(Map<String, Object>... resultados) {
+        return Map.of("status", "OK", "results", List.of(resultados));
+    }
+
+    @Test
+    void inversaDevuelveLaDireccionYConservaLasCoordenadasDelPin() {
+        doReturn(geocodeOk(Map.of("formatted_address", "Av. Arequipa 123, Lince", "types", List.of("street_address"))))
+                .when(service).geocodificar(any(), any());
+
+        LugarDTO r = service.inversa(new BigDecimal("-12.0912345678"), new BigDecimal("-77.0345"));
+
+        assertEquals("Av. Arequipa 123, Lince", r.direccion());
+        assertEquals(new BigDecimal("-12.091235"), r.latitud());
+        assertEquals(new BigDecimal("-77.034500"), r.longitud());
+    }
+
+    @Test
+    void inversaPrefiereUnaDireccionLegibleAUnPlusCode() {
+        doReturn(geocodeOk(
+                Map.of("formatted_address", "9XQ4+8V Lima", "types", List.of("plus_code")),
+                Map.of("formatted_address", "Calle Los Pinos 45, Surco", "types", List.of("route"))))
+                .when(service).geocodificar(any(), any());
+
+        assertEquals("Calle Los Pinos 45, Surco", service.inversa(BigDecimal.ONE, BigDecimal.TEN).direccion());
+    }
+
+    @Test
+    void inversaUsaElPlusCodeSiEsLoUnicoQueHay() {
+        doReturn(geocodeOk(Map.of("formatted_address", "9XQ4+8V Lima", "types", List.of("plus_code"))))
+                .when(service).geocodificar(any(), any());
+
+        assertEquals("9XQ4+8V Lima", service.inversa(BigDecimal.ONE, BigDecimal.TEN).direccion());
+    }
+
+    @Test
+    void inversaSinResultadosPideOtroPunto() {
+        doReturn(Map.of("status", "ZERO_RESULTS", "results", List.of())).when(service).geocodificar(any(), any());
+
+        assertThrows(IllegalArgumentException.class, () -> service.inversa(BigDecimal.ONE, BigDecimal.TEN));
+    }
+
+    @Test
+    void inversaRechazaCoordenadasFueraDeRango() {
+        assertThrows(IllegalArgumentException.class, () -> service.inversa(new BigDecimal("95"), BigDecimal.ZERO));
+        assertThrows(IllegalArgumentException.class, () -> service.inversa(BigDecimal.ZERO, new BigDecimal("181")));
+        assertThrows(IllegalArgumentException.class, () -> service.inversa(null, BigDecimal.ZERO));
+        verify(service, never()).geocodificar(any(), any());
+    }
+
+    @Test
+    void inversaSinClaveDaConflicto() {
+        ReflectionTestUtils.setField(service, "apiKey", "");
+
+        assertThrows(ConflictException.class, () -> service.inversa(BigDecimal.ONE, BigDecimal.TEN));
+    }
+
+    @Test
+    void inversaSiGoogleFallaDevuelve502() {
+        doThrow(new RestClientException("caído https://maps.googleapis.com/...key=SECRETA")).when(service).geocodificar(any(), any());
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class, () -> service.inversa(BigDecimal.ONE, BigDecimal.TEN));
+
+        assertEquals(HttpStatus.BAD_GATEWAY, ex.getStatusCode());
+        assertFalse(String.valueOf(ex.getReason()).contains("SECRETA"));
+    }
+
+    @Test
+    void inversaConEstadoDeErrorDeGoogleDevuelve502() {
+        doReturn(Map.of("status", "REQUEST_DENIED")).when(service).geocodificar(any(), any());
+
+        assertThrows(ResponseStatusException.class, () -> service.inversa(BigDecimal.ONE, BigDecimal.TEN));
     }
 }

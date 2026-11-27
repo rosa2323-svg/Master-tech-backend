@@ -38,10 +38,9 @@ public class VentaMapper {
 
         dto.setTipoEntrega(venta.getTipoEntrega());
         dto.setCostoEnvio(venta.getCostoEnvio());
-        // Pedidos antiguos sin copia propia: se muestra la dirección actual del perfil.
-        dto.setDireccionEntrega(venta.getDireccionEntrega() != null
-                ? venta.getDireccionEntrega()
-                : dto.getUsuarioDireccion());
+        // Solo la dirección que el cliente eligió al pagar. La del perfil va aparte (usuarioDireccion): mezclarlas
+        // hacía parecer que el pedido iba a la dirección del perfil cuando no se guardó ninguna.
+        dto.setDireccionEntrega(venta.getDireccionEntrega());
         dto.setLatitudEntrega(venta.getLatitudEntrega());
         dto.setLongitudEntrega(venta.getLongitudEntrega());
         dto.setDistanciaKm(venta.getDistanciaKm());
