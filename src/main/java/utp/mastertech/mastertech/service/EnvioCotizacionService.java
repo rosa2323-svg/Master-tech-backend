@@ -26,13 +26,17 @@ import java.util.Set;
  * Cotiza envíos a domicilio: sede activa más cercana, tarifa por tramo de distancia,
  * envío gratis por monto y fecha estimada en días hábiles (lunes a sábado, sin feriados).
  *
- * La distancia es en línea recta (Haversine). En la etapa 4 se reemplaza por la ruta real de Google.
+ * La sede se elige por distancia en línea recta (Haversine) y el kilometraje que se cobra es el de la ruta
+ * real de Google cuando está disponible; si no, el de línea recta.
  */
 @Service
 public class EnvioCotizacionService {
 
     private static final double RADIO_TIERRA_KM = 6371.0088;
     private static final int MAX_DIAS_BUSQUEDA = 366;
+
+    @Autowired
+    private DistanciaRutaService distanciaRutaService;
 
     @Autowired
     private PuntoRepartoRepository puntoRepartoRepository;
@@ -78,7 +82,8 @@ public class EnvioCotizacionService {
                 cercana = sede;
             }
         }
-        BigDecimal km = BigDecimal.valueOf(mejor).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal enLinea = BigDecimal.valueOf(mejor).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal km = distanciaRutaService.distanciaPorRutaKm(cercana, latitud, longitud).orElse(enLinea);
 
         TarifaEnvio tarifa = tarifaEnvioRepository.findByActivoTrue().stream()
                 .filter(t -> km.compareTo(t.getDistanciaDesdeKm()) >= 0 && km.compareTo(t.getDistanciaHastaKm()) < 0)

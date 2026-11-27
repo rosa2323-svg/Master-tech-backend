@@ -23,11 +23,15 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class EnvioCotizacionServiceTest {
 
+    @Mock
+    private DistanciaRutaService distanciaRutaService;
     @Mock
     private PuntoRepartoRepository puntoRepartoRepository;
     @Mock
@@ -244,6 +248,40 @@ class EnvioCotizacionServiceTest {
     }
 
     @Test
+    void cobraLaDistanciaPorRutaDeGoogleCuandoEstaDisponible() {
+        PuntoReparto sur = sede(3, "Sur", "-12.170000", "-77.010000");
+        when(puntoRepartoRepository.findByActivoTrue()).thenReturn(List.of(sur));
+        when(tarifaEnvioRepository.findByActivoTrue()).thenReturn(List.of(
+                tarifa("0 a 5 km", 0, 5, "8.00", null, 1, 1),
+                tarifa("5 a 10 km", 5, 10, "12.00", null, 1, 1)));
+        when(distanciaRutaService.distanciaPorRutaKm(eq(sur), any(BigDecimal.class), any(BigDecimal.class)))
+                .thenReturn(Optional.of(new BigDecimal("6.40")));
+        calendario(0);
+
+        // en línea recta serían ~2,5 km (tramo 0 a 5), pero por calles son 6,4 km (tramo 5 a 10)
+        EnvioCotizacionService.Cotizacion c = service.cotizar(
+                BigDecimal.TEN, new BigDecimal("-12.150000"), new BigDecimal("-77.020000"), MIE_10AM);
+
+        assertEquals(0, new BigDecimal("6.40").compareTo(c.distanciaKm()));
+        assertEquals("5 a 10 km", c.tarifa().getNombre());
+    }
+
+    @Test
+    void sinRutaDeGoogleUsaLaLineaRecta() {
+        when(puntoRepartoRepository.findByActivoTrue()).thenReturn(List.of(sede(3, "Sur", "-12.170000", "-77.010000")));
+        when(tarifaEnvioRepository.findByActivoTrue()).thenReturn(List.of(tarifa("0 a 5 km", 0, 5, "8.00", null, 1, 1)));
+        when(distanciaRutaService.distanciaPorRutaKm(any(PuntoReparto.class), any(BigDecimal.class), any(BigDecimal.class)))
+                .thenReturn(Optional.empty());
+        calendario(0);
+
+        EnvioCotizacionService.Cotizacion c = service.cotizar(
+                BigDecimal.TEN, new BigDecimal("-12.150000"), new BigDecimal("-77.020000"), MIE_10AM);
+
+        assertTrue(c.cubierto());
+        assertTrue(c.distanciaKm().compareTo(new BigDecimal("5")) < 0);
+    }
+
+    @Test
     void sinSedesActivasNoHayCobertura() {
         when(puntoRepartoRepository.findByActivoTrue()).thenReturn(List.of());
 
@@ -277,4 +315,3 @@ class EnvioCotizacionServiceTest {
                 new BigDecimal("-77.020000"), MIE_10AM).cubierto());
     }
 }
-
