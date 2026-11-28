@@ -559,7 +559,8 @@ class PedidoServiceTest {
         when(ventaService.procesarVenta(anyList(), eq(usuario), anyString(), isNull(), any())).thenReturn(new Venta());
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
-            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesionPagada("ana@x.com", "1:2"));
+            Session sesion = sesionPagada("ana@x.com", "1:2");
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesion);
             service.registrarPagoDeSesion("cs_1");
         }
 
@@ -603,7 +604,8 @@ class PedidoServiceTest {
                 .thenReturn(existente);
 
         try (MockedStatic<Session> stripe = mockStatic(Session.class)) {
-            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesionPagada("ana@x.com", "1:2"));
+            Session sesion = sesionPagada("ana@x.com", "1:2");
+            stripe.when(() -> Session.retrieve("cs_1")).thenReturn(sesion);
             assertSame(existente, service.confirmar("ana@x.com", "cs_1"));
         }
     }
