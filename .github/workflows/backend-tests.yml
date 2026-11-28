@@ -11,6 +11,22 @@ jobs:
     name: ./gradlew test
     runs-on: ubuntu-latest
 
+    # PostgreSQL desechable para las pruebas de integración (bloqueo de stock, concurrencia).
+    # No es la base de Supabase: se crea vacía en cada ejecución y se destruye al terminar.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mastertech_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Descargar el código
         uses: actions/checkout@v4
@@ -27,8 +43,12 @@ jobs:
       - name: Dar permisos al wrapper
         run: chmod +x gradlew
 
-      - name: Ejecutar pruebas unitarias
+      - name: Ejecutar pruebas unitarias y de integración
         run: ./gradlew test --no-daemon
+        env:
+          TEST_DB_URL: jdbc:postgresql://localhost:5432/mastertech_test
+          TEST_DB_USERNAME: postgres
+          TEST_DB_PASSWORD: postgres
 
       - name: Guardar reporte de pruebas
         if: always()
