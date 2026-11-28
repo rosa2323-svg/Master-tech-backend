@@ -464,6 +464,17 @@ class VentaServiceTest {
     }
 
     @Test
+    void pedirElEstadoEnElQueYaEstaEsIdempotenteYNoDuplicaElHistorial() {
+        when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Preparando")));
+
+        Venta r = service.cambiarEstado(1L, "Preparando", "nota", "luis@x.com");
+
+        assertEquals("Preparando", r.getEstado());
+        verify(ventaRepository, never()).save(any(Venta.class));
+        verify(envioEventoRepository, never()).save(any());
+    }
+
+    @Test
     void cambiarEstadoAUnValorDesconocidoDevuelve400() {
         when(ventaRepository.findById(1L)).thenReturn(Optional.of(ventaEnEstado("Pagado")));
 
