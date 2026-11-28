@@ -238,6 +238,7 @@ public class VentaService {
 
     /**
      * Avanza un pedido al siguiente estado de su flujo (domicilio o recojo) y lo anota en el historial.
+     * Pedir el estado en que ya está no hace nada y devuelve el pedido.
      *
      * @param nota  comentario opcional del despachador
      * @param email quién lo hizo (null = sistema)
@@ -255,6 +256,11 @@ public class VentaService {
         if (actual < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Este pedido no está en el flujo de despacho (estado actual: " + venta.getEstado() + ")");
+        }
+        // Idempotente: si el pedido ya está en ese estado (doble clic, dos despachadores a la vez, reintento),
+        // se devuelve tal cual, sin duplicar el evento del historial. El estado final conserva su mensaje propio.
+        if (destino == actual && actual + 1 < flujo.size()) {
+            return venta;
         }
         if (destino != actual + 1) {
             String siguiente = actual + 1 < flujo.size() ? flujo.get(actual + 1) : null;
