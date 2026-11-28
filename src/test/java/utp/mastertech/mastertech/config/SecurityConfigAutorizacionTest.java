@@ -77,6 +77,8 @@ class SecurityConfigAutorizacionTest {
         @GetMapping("/api/v1/despacho/pedidos") String despacho() { return "[]"; }
         @PatchMapping("/api/v1/despacho/pedidos/1/estado") String cambiarEstado() { return "{}"; }
         @GetMapping("/api/v1/reembolsos") String reembolsos() { return "[]"; }
+        @PostMapping("/api/v1/reembolsos/1/aprobar") String aprobar() { return "{}"; }
+        @PostMapping("/api/v1/reembolsos/1/rechazar") String rechazar() { return "{}"; }
         @GetMapping("/api/v1/ventas") String ventas() { return "[]"; }
         @GetMapping("/api/v1/usuarios") String usuarios() { return "[]"; }
         @GetMapping("/api/v1/envios/tarifas") String tarifas() { return "[]"; }
@@ -153,6 +155,8 @@ class SecurityConfigAutorizacionTest {
         mvc.perform(patch("/api/v1/despacho/pedidos/1/estado").header("Authorization", user)
                 .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/reembolsos").header("Authorization", user)).andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/reembolsos/1/aprobar").header("Authorization", user)
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/ventas").header("Authorization", user)).andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/usuarios").header("Authorization", user)).andExpect(status().isForbidden());
     }
@@ -160,13 +164,18 @@ class SecurityConfigAutorizacionTest {
     // ---------- despachador ----------
 
     @Test
-    void elDespachadorVeDespachoPeroNoReembolsosNiAdministracion() throws Exception {
+    void elDespachadorVeDespachoYReembolsosPeroNoLaAdministracion() throws Exception {
         String desp = bearer("DESPACHADOR");
         mvc.perform(get("/api/v1/despacho/pedidos").header("Authorization", desp)).andExpect(status().isOk());
         mvc.perform(patch("/api/v1/despacho/pedidos/1/estado").header("Authorization", desp)
                 .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isOk());
 
-        mvc.perform(get("/api/v1/reembolsos").header("Authorization", desp)).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/reembolsos").header("Authorization", desp)).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/reembolsos/1/aprobar").header("Authorization", desp)
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isOk());
+        mvc.perform(post("/api/v1/reembolsos/1/rechazar").header("Authorization", desp)
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isOk());
+
         mvc.perform(get("/api/v1/ventas").header("Authorization", desp)).andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/usuarios").header("Authorization", desp)).andExpect(status().isForbidden());
         mvc.perform(get("/api/v1/envios/tarifas").header("Authorization", desp)).andExpect(status().isForbidden());

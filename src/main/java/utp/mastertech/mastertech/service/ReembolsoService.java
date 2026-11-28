@@ -21,7 +21,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * Reembolsos: el cliente solicita, un administrador aprueba o rechaza.
+ * Reembolsos: el cliente solicita; un despachador o un administrador aprueba o rechaza.
  * Solo se reembolsa el pedido completo (productos + envío) y únicamente antes de que salga a reparto
  * o quede listo para recoger. Al aprobar: se devuelve el dinero en Stripe, vuelve el stock y el pedido pasa a ANULADA.
  */

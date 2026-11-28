@@ -12,7 +12,7 @@ import utp.mastertech.mastertech.service.ReembolsoService;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/** Solicitudes de reembolso: solo ADMIN (ver SecurityConfig, /api/v1/**). */
+/** Solicitudes de reembolso: las resuelven DESPACHADOR y ADMIN (ver SecurityConfig). */
 @RestController
 @RequestMapping("/api/v1/reembolsos")
 public class ReembolsoRestController {

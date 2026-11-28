@@ -67,6 +67,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/me", "/api/v1/me/**", "/api/v1/pedidos/**").authenticated()
                         // Despacho: el despachador y el admin ven pedidos y cambian su estado
                         .requestMatchers("/api/v1/despacho/**").hasAnyRole("DESPACHADOR", "ADMIN")
+                        // Reembolsos: el despachador y el admin ven las solicitudes y las aprueban o rechazan
+                        .requestMatchers("/api/v1/reembolsos/**").hasAnyRole("DESPACHADOR", "ADMIN")
                         // Todo lo demás de la API es solo para administradores
                         .requestMatchers("/api/v1/**").hasRole("ADMIN")
                         .anyRequest().denyAll()
