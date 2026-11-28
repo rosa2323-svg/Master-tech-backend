@@ -112,6 +112,17 @@ class VentaServiceConPostgresTest {
         return List.of(i);
     }
 
+    /**
+     * Texto corto de los resultados para los mensajes de error. No se puede concatenar una Venta directamente:
+     * su toString (Lombok) recorre venta -> detalles -> venta... sin fin y provoca StackOverflowError.
+     */
+    private static String resumen(List<Object> resultados) {
+        return resultados.stream()
+                .map(r -> r instanceof Venta v ? "Venta#" + v.getId() : r.getClass().getSimpleName())
+                .toList()
+                .toString();
+    }
+
     /** Lanza las tareas a la vez y devuelve el resultado de cada una (o la excepción que lanzó). */
     private List<Object> enParalelo(List<Callable<Venta>> tareas) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(tareas.size());
@@ -146,8 +157,8 @@ class VentaServiceConPostgresTest {
 
         long ventas = resultados.stream().filter(r -> r instanceof Venta).count();
         long sinStock = resultados.stream().filter(r -> r instanceof StockInsuficienteException).count();
-        assertEquals(1, ventas, "debe registrarse exactamente una venta: " + resultados);
-        assertEquals(1, sinStock, "la otra debe fallar por stock: " + resultados);
+        assertEquals(1, ventas, () -> "debe registrarse exactamente una venta: " + resumen(resultados));
+        assertEquals(1, sinStock, () -> "la otra debe fallar por stock: " + resumen(resultados));
         assertEquals(0, productoRepository.findById(productoId).orElseThrow().getStock());
         assertEquals(1, ventaRepository.count());
     }
@@ -166,7 +177,7 @@ class VentaServiceConPostgresTest {
         List<Object> resultados = enParalelo(tareas);
 
         long ventas = resultados.stream().filter(r -> r instanceof Venta).count();
-        assertEquals(3, ventas, "con stock 3 solo 3 compras pueden pasar: " + resultados);
+        assertEquals(3, ventas, () -> "con stock 3 solo 3 compras pueden pasar: " + resumen(resultados));
         assertEquals(0, productoRepository.findById(productoId).orElseThrow().getStock());
         assertEquals(3, ventaRepository.count());
     }
