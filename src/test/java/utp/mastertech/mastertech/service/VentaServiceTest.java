@@ -100,6 +100,19 @@ class VentaServiceTest {
     }
 
     @Test
+    void validarStockRechazaProductoInhabilitado() {
+        Producto inhabilitado = producto(1, "Mouse", 50, 10);
+        inhabilitado.setActivo(false);
+        when(productoRepository.findById(1L)).thenReturn(Optional.of(inhabilitado));
+
+        List<String> errores = service.validarStock(List.of(item(1, 1)));
+
+        assertEquals(1, errores.size());
+        assertTrue(errores.get(0).contains("ya no está disponible"));
+        assertTrue(errores.get(0).contains("Mouse"));
+    }
+
+    @Test
     void validarStockReportaCantidadMayorAlStock() {
         when(productoRepository.findById(1L)).thenReturn(Optional.of(producto(1, "Mouse", 50, 2)));
 
@@ -492,6 +505,8 @@ class VentaServiceTest {
     @Test
     void procesarVentaGuardaElPagoDeStripeParaPoderReembolsar() {
         Producto p = producto(1, "Mouse", 10.0, 5);
+        when(productoRepository.findByIdForUpdate(1L)).thenReturn(Optional.of(p));
+        when(ventaRepository.save(any(Venta.class))).thenAnswer(inv -> inv.getArgument(0));
         Venta v = service.procesarVenta(List.of(item(1L, 1)), new Usuario(), "ORD-X", null, "pi_123");
 
         assertEquals("pi_123", v.getStripePaymentIntentId());

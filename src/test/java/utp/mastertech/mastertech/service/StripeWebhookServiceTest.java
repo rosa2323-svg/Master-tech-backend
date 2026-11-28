@@ -56,9 +56,9 @@ class StripeWebhookServiceTest {
 
     @Test
     void sesionCompletadaRegistraElPago() {
+        Event evento = evento("checkout.session.completed", "cs_1");
         try (MockedStatic<Webhook> w = mockStatic(Webhook.class)) {
-            w.when(() -> Webhook.constructEvent("{}", "t=1,v1=x", "whsec_test"))
-                    .thenReturn(evento("checkout.session.completed", "cs_1"));
+            w.when(() -> Webhook.constructEvent("{}", "t=1,v1=x", "whsec_test")).thenReturn(evento);
 
             service.procesar("{}", "t=1,v1=x");
         }
@@ -68,9 +68,9 @@ class StripeWebhookServiceTest {
 
     @Test
     void sesionExpiradaNoHaceNada() {
+        Event evento = evento("checkout.session.expired", "cs_1");
         try (MockedStatic<Webhook> w = mockStatic(Webhook.class)) {
-            w.when(() -> Webhook.constructEvent(anyString(), anyString(), anyString()))
-                    .thenReturn(evento("checkout.session.expired", "cs_1"));
+            w.when(() -> Webhook.constructEvent(anyString(), anyString(), anyString())).thenReturn(evento);
 
             service.procesar("{}", "firma");
         }
@@ -80,9 +80,9 @@ class StripeWebhookServiceTest {
 
     @Test
     void otrosEventosSeIgnoranConExito() {
+        Event evento = evento("charge.succeeded", null);
         try (MockedStatic<Webhook> w = mockStatic(Webhook.class)) {
-            w.when(() -> Webhook.constructEvent(anyString(), anyString(), anyString()))
-                    .thenReturn(evento("charge.succeeded", null));
+            w.when(() -> Webhook.constructEvent(anyString(), anyString(), anyString())).thenReturn(evento);
 
             assertDoesNotThrow(() -> service.procesar("{}", "firma"));
         }
