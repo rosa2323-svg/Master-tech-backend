@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict uIyveDPb2h2zZFdvb8fn2agAlxeXYPZqbzndsQCWnntZxRyOCCffGYgEgBVPRvM
+\restrict 4sX6Mq4vrde0tjYn6AE6rcCcTbE3lR2ljApZPQQbTDhucautS83GtX1VRtLFx7R
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.12 (Ubuntu 17.12-1.pgdg26.04+1)
@@ -5163,7 +5163,7 @@ CREATE TABLE public.ventas (
     stripe_refund_id character varying(100),
     fecha_anulacion timestamp without time zone,
     motivo_anulacion character varying(255),
-    CONSTRAINT chk_ventas_estado CHECK (((estado)::text = ANY ((ARRAY['PENDIENTE'::character varying, 'COMPLETADA'::character varying, 'ANULADA'::character varying, 'Pagado'::character varying, 'Preparando'::character varying, 'Listo'::character varying, 'Despachado'::character varying, 'En ruta'::character varying, 'Listo para recoger'::character varying, 'Entregado'::character varying])::text[]))),
+    CONSTRAINT chk_ventas_estado CHECK (((estado)::text = ANY ((ARRAY['PENDIENTE'::character varying, 'COMPLETADA'::character varying, 'ANULADA'::character varying, 'Pagado'::character varying, 'Preparando'::character varying, 'En ruta'::character varying, 'Listo para recoger'::character varying, 'Entregado'::character varying])::text[]))),
     CONSTRAINT chk_ventas_tipo_entrega CHECK (((tipo_entrega)::text = ANY ((ARRAY['DOMICILIO'::character varying, 'RECOJO'::character varying])::text[])))
 );
 
@@ -7688,5 +7688,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict uIyveDPb2h2zZFdvb8fn2agAlxeXYPZqbzndsQCWnntZxRyOCCffGYgEgBVPRvM
+\unrestrict 4sX6Mq4vrde0tjYn6AE6rcCcTbE3lR2ljApZPQQbTDhucautS83GtX1VRtLFx7R
 
